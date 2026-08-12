@@ -1,0 +1,23 @@
+{
+  "name": "personal-tasks-bot",
+  "version": "1.0.0",
+  "description": "המנהל האישי בוואטסאפ — בוט משימות שמתחבר לצ'אט 'הודעה לעצמי' דרך מכשיר מקושר, מבין עברית חופשית והקלטות קוליות, ושולח סיכום בוקר.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "preview": "node scripts/preview-digest.js",
+    "check": "node scripts/check-setup.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.5",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.23.0"
+  }
+}

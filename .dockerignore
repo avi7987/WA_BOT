@@ -1,0 +1,9 @@
+node_modules
+.wwebjs_auth
+.wwebjs_cache
+.env
+qr-*.png
+test
+scripts
+db
+*.md

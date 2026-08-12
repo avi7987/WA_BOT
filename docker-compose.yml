@@ -1,0 +1,22 @@
+# ============================================================
+#  הרצה בשרת:  docker compose up -d --build
+#  צפייה ב-QR:  docker compose logs -f
+# ============================================================
+services:
+  tasks-bot:
+    build: .
+    container_name: tasks-bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: Asia/Jerusalem
+      WA_SESSION_PATH: /data/.wwebjs_auth
+    ports:
+      - "3000:3000"
+    volumes:
+      - wa-session:/data
+    # whatsapp-web.js מריץ דפדפן אמיתי לכל סשן — צריך זיכרון משותף
+    shm_size: "1gb"
+
+volumes:
+  wa-session:
