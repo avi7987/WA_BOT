@@ -142,9 +142,9 @@ async function boot() {
       await greetOnce(person.key, session);
     });
 
-    session.client.initialize().catch((e) => {
-      console.error(`❌ ${person.name}: האתחול נכשל —`, e.message || e);
-    });
+    // הפעלת הדפדפן נכשלת לפעמים באופן רגעי (עומס, קונטיינר שעוד נסגר).
+    // בלי ניסיון חוזר הבוט היה נשאר "חי" אבל בלי דפדפן — כלומר מת בשקט.
+    initWithRetry(session, person.name);
 
     // מחכים שהסשן הזה יתחבר לפני שמרימים את הבא — אחרת שני קודי QR
     // מופיעים יחד בטרמינל ואי אפשר לדעת איזה שייך למי.
@@ -153,6 +153,39 @@ async function boot() {
   }
 
   startScheduler(deps);
+  startWatchdog();
+}
+
+async function initWithRetry(session, label, attempts = 5) {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      await session.client.initialize();
+      return true;
+    } catch (e) {
+      console.error(`❌ ${label}: אתחול נכשל (${i}/${attempts}) — ${e.message || e}`);
+      if (i < attempts) await new Promise((r) => setTimeout(r, i * 8000));
+    }
+  }
+  console.error(`❌ ${label}: לא הצלחתי להפעיל דפדפן. השומר יאתחל את השירות.`);
+  return false;
+}
+
+// ── שומר ראש ────────────────────────────────────────────────────────
+// אם סשן תקוע ולא מגיע ל-ready, עדיף להפיל את התהליך ולתת לדוקר
+// להרים אותו נקי (restart: unless-stopped) מאשר להישאר חי-אך-מושבת.
+function startWatchdog(graceMs = 12 * 60_000) {
+  const since = new Map();
+  setInterval(() => {
+    for (const [key, s] of sessions) {
+      if (s.state === 'ready') { since.delete(key); continue; }
+      if (!since.has(key)) since.set(key, Date.now());
+      const stuckFor = Date.now() - since.get(key);
+      if (stuckFor > graceMs) {
+        console.error(`⛔ ${s.label}: תקוע במצב "${s.state}" כבר ${Math.round(stuckFor / 60000)} דקות — מאתחל את השירות.`);
+        process.exit(1);
+      }
+    }
+  }, 60_000);
 }
 
 function waitForReady(session, timeoutMs) {
