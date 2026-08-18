@@ -95,6 +95,27 @@ test('טקסט חופשי אינו נחשב פקודה', () => {
   assert.equal(parseCommand('להזמין מתנה לאמא'), null);
 });
 
+test('בקשת רשימה בניסוח חופשי מזוהה — גם בלי AI', () => {
+  const asList = (s, filter = 'digest') => {
+    const c = parseCommand(s);
+    assert.ok(c, `לא זוהה: ${s}`);
+    assert.equal(c.kind, 'list', s);
+    assert.equal(c.filter, filter, s);
+  };
+  asList('תציג לי את רשימת המשימות שלי');
+  asList('תראה לי את המשימות');
+  asList('הצג רשימה');
+  asList('מה המשימות שלי');
+  asList('תציג את המשימות של היום', 'today');
+  asList('תראה לי מה יש לי מחר', 'tomorrow');
+  asList('תציג את המשימות באיחור', 'overdue');
+  asList('תראה את הרשימה המשותפת', 'shared');
+
+  // ולא לבלוע בקשות הוספה שמזכירות "רשימה"
+  assert.equal(parseCommand('תוסיף משימה לרשימה: לקנות חלב'), null);
+  assert.equal(parseCommand('תזכיר לי לבדוק את הרשימה בסופר'), null);
+});
+
 test('זיהוי אזכור שעה — הבלם על ה-AI', () => {
   const withTime = ['פגישה מחר ב-14:30', 'פגישה מחר בשתיים וחצי', 'להתקשר ב-8 בערב',
     'בשעה 9', 'להוציא את הכלב כל בוקר ב-7', 'תזכיר לי בעוד שעתיים', 'ישיבה בצהריים'];

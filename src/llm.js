@@ -108,20 +108,34 @@ export async function transcribe(base64, mimetype) {
 // ── Gemini ──────────────────────────────────────────────────────────
 const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
+// עומס אצל הספק (503) או חריגה מקצב (429) הם זמניים — שווה לנסות שוב
+// לפני שנופלים לפרסר המקומי.
+const TRANSIENT = new Set([429, 500, 502, 503, 504]);
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function geminiText(system, user) {
-  const res = await fetch(`${GEMINI_BASE}/${GEMINI_MODEL}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY },
-    signal: AbortSignal.timeout(35000),
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: system }] },
-      contents: [{ role: 'user', parts: [{ text: user }] }],
-      generationConfig: { temperature: 0.1, responseMimeType: 'application/json', maxOutputTokens: 2048 },
-    }),
-  });
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const data = await res.json();
-  return data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') || '';
+  let last = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await wait(attempt * 1500);
+    const res = await fetch(`${GEMINI_BASE}/${GEMINI_MODEL}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY },
+      signal: AbortSignal.timeout(35000),
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: 'user', parts: [{ text: user }] }],
+        generationConfig: { temperature: 0.1, responseMimeType: 'application/json', maxOutputTokens: 2048 },
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') || '';
+    }
+    last = new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    if (!TRANSIENT.has(res.status)) break;
+    console.warn(`⚠️  Gemini ${res.status} — מנסה שוב (${attempt + 1}/3)`);
+  }
+  throw last;
 }
 
 async function geminiAudio(base64, mimetype) {

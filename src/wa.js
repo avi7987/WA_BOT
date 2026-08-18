@@ -62,6 +62,7 @@ export function createSession({ key, label, onSelfMessage }) {
       if (fs.existsSync(f)) fs.unlinkSync(f);       // לא משאירים קוד קישור מסתובב
     } catch { /* לא קריטי */ }
     console.log(`✅ ${label}: מחובר (${session.phone}). מקשיב לצ'אט "הודעה לעצמי" בלבד.`);
+    console.log(`   שולח אל: ${session.selfLid || session.selfId}${session.selfLid ? ' (LID)' : ' (מספר)'}`);
   });
 
   client.on('auth_failure', (m) => {

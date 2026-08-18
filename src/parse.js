@@ -213,6 +213,11 @@ export function parseCommand(raw) {
   // ביטול הפעולה האחרונה
   if (/^(ביטול|בטל אחרון|טעות|אופס)$/i.test(t)) return { kind: 'undo' };
 
+  // בקשת רשימה בניסוח חופשי — חשוב במיוחד כשה-AI לא זמין,
+  // אחרת "תציג לי את רשימת המשימות" היה נשמר בטעות כמשימה חדשה.
+  const asked = parseListIntent(t);
+  if (asked) return asked;
+
   // רשימות
   if (/^(רשימה|המשימות|מה יש לי|מה נשאר|סטטוס|רענן)$/.test(t)) return { kind: 'list', filter: 'digest' };
   if (/^(היום|מה היום|מה יש לי היום)$/.test(t)) return { kind: 'list', filter: 'today' };
@@ -253,6 +258,27 @@ export function parseCommand(raw) {
   if (m) return { kind: 'digest_time', time: `${String(+m[1]).padStart(2, '0')}:${m[2]}` };
 
   return null;
+}
+
+// ── "תציג לי את הרשימה" על כל גלגוליו ───────────────────────────────
+const ASKING = /^(תציג|תראה|הצג|תשלח|שלח|תן|תביא|רוצה לראות|אפשר לראות|מה)/;
+const ABOUT_TASKS = /(רשימ|משימ|מה יש לי|מה נשאר|מה נותר)/;
+// מילים שמסגירות שזו בקשה חדשה ולא שאילתה ("תוסיף משימה לרשימה")
+const ADDING = /(תוסיף|הוסף|תרשום|רשום|תזכיר|צריך|תכניס)/;
+
+function parseListIntent(t) {
+  if (ADDING.test(t)) return null;
+  if (!ABOUT_TASKS.test(t)) return null;
+  if (!ASKING.test(t) && !/^(רשימת|המשימות)/.test(t)) return null;
+
+  // אם צוין טווח זמן — מכבדים אותו
+  if (/באיחור|פג תוקף|איחורים/.test(t)) return { kind: 'list', filter: 'overdue' };
+  if (/היום/.test(t)) return { kind: 'list', filter: 'today' };
+  if (/מחר/.test(t)) return { kind: 'list', filter: 'tomorrow' };
+  if (/השבוע/.test(t)) return { kind: 'list', filter: 'week' };
+  if (/משותפ|ביחד|שנינו/.test(t)) return { kind: 'list', filter: 'shared' };
+  if (/הכל|כל המשימות|מלאה/.test(t)) return { kind: 'list', filter: 'all' };
+  return { kind: 'list', filter: 'digest' };
 }
 
 function numbers(s) {
