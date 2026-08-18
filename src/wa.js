@@ -13,7 +13,28 @@ import QRCode from 'qrcode';
 
 const SESSION_ROOT = process.env.WA_SESSION_PATH || './.wwebjs_auth';
 
+/**
+ * כרומיום נועל את תיקיית הפרופיל בזמן ריצה, ומשחרר אותה רק בסגירה מסודרת.
+ * אחרי קריסה או כיבוי פתאומי הנעילה נשארת ומצביעה על תהליך שכבר לא קיים —
+ * וכל הפעלה עתידית נכשלת ב-"profile appears to be in use".
+ * בשרת שאמור לרוץ 24/7 זה אומר השתתקות לצמיתות, אז מנקים בכל עלייה.
+ */
+function clearStaleLocks(key) {
+  const dir = path.join(SESSION_ROOT, `session-${key}`);
+  for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+    const p = path.join(dir, f);
+    try {
+      if (fs.existsSync(p) || fs.lstatSync(p, { throwIfNoEntry: false })) {
+        fs.rmSync(p, { force: true });
+        console.log(`🧹 ${key}: הוסרה נעילה ישנה (${f})`);
+      }
+    } catch { /* לא קיים או לא נגיש — ממשיכים */ }
+  }
+}
+
 export function createSession({ key, label, onSelfMessage }) {
+  clearStaleLocks(key);
+
   const client = new Client({
     authStrategy: new LocalAuth({ clientId: key, dataPath: SESSION_ROOT }),
     puppeteer: {
