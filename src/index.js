@@ -25,10 +25,10 @@ if (String(process.env.ENABLE_PARTNER) === 'true') {
     key: 'partner',
     name: process.env.PARTNER_NAME || 'בן/בת הזוג',
     role: 'member',
-    // הרשימה של בן/בת הזוג היא הרשימה המשותפת בלבד,
-    // וכל משימה שהם מוסיפים נכנסת אליה אוטומטית.
-    sees_own_tasks: false,
-    default_shared: true,
+    // מודל שלושת האזורים: לכל אחד אזור אישי משלו, ואזור משותף אחד.
+    // סימטרי לחלוטין — משימה היא אישית אלא אם ההקשר מרמז על שניהם.
+    sees_own_tasks: true,
+    default_shared: false,
   });
 }
 

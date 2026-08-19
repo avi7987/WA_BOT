@@ -15,6 +15,25 @@ import { parseCommand, parseTaskFallback, extractDue, mentionsTime } from './par
 
 const PENDING_TTL_MS = 15 * 60e3;
 
+// אפשרויות תצוגה משותפות לכל הרינדורים: שם בן/בת הזוג, ומיפוי מזהה→שם
+// כדי שאפשר יהיה לכתוב "בטיפול איה" במקום מזהה טכני.
+function viewOpts(user, deps) {
+  const partner = deps.partnerOf(user);
+  return {
+    partnerName: partner?.name || null,
+    nameOf: (id) => (id === user.id ? user.name : (partner && id === partner.id ? partner.name : null)),
+  };
+}
+
+// "me" / "partner" → מזהה משתמש אמיתי
+function assigneeId(user, deps, who) {
+  if (who === 'me' || who === user.name) return user.id;
+  if (who === 'partner') return deps.partnerOf(user)?.id || null;
+  const partner = deps.partnerOf(user);
+  if (partner && who === partner.name) return partner.id;
+  return null;
+}
+
 /**
  * deps = {
  *   partnerOf(user) -> user|null,
@@ -66,6 +85,7 @@ async function route(user, text, deps) {
   const partner = deps.partnerOf(user);
   const parsed = await llm.interpret(text, {
     tasks: ordered,
+    userId: user.id,
     userName: user.name,
     partnerName: partner?.name || null,
     defaultShared: !!user.default_shared,
@@ -74,12 +94,17 @@ async function route(user, text, deps) {
   if (parsed?.actions?.length) return execActions(user, parsed, text, deps);
 
   // ── 4. גיבוי מקומי ──
-  const spec = parseTaskFallback(text);
+  const spec = parseTaskFallback(text, new Date(), {
+    ownerName: user.name,
+    partnerName: partner?.name || null,
+  });
+  spec.assigned_to = assigneeId(user, deps, spec.assign);
+  if (spec.assigned_to) spec.shared = true;
   if (user.default_shared) spec.shared = true;
   spec.source_text = text;
   const res = await addOne(user, spec, deps);
   if (res.pendingPrompt) return res.pendingPrompt;
-  return R.renderAdded([res], { partnerName: partner?.name });
+  return R.renderAdded([res], viewOpts(user, deps));
 }
 
 // ── פקודות מהירות ───────────────────────────────────────────────────
@@ -93,26 +118,28 @@ async function handleCommand(user, cmd, deps) {
     case 'undo': {
       const la = await T.undoLast(user);
       if (!la) return 'אין מה לבטל.';
-      const words = { add: 'ההוספה בוטלה', complete: 'החזרתי לרשימה', delete: 'שחזרתי', snooze: 'החזרתי את התאריך הקודם', share: 'החזרתי את מצב השיתוף' };
+      const words = { add: 'ההוספה בוטלה', complete: 'החזרתי לרשימה', delete: 'שחזרתי', snooze: 'החזרתי את התאריך הקודם', share: 'החזרתי את מצב השיתוף', assign: 'החזרתי את השיוך הקודם' };
       return `↩️ ${words[la.kind] || 'בוטל'}.`;
     }
 
     case 'list': {
       const tasks = await db.openTasksFor(user);
       const doneTasks = cmd.filter === 'done' ? await db.recentlyDone(user) : null;
+      const o = { ...viewOpts(user, deps), doneTasks };
       const view = cmd.filter === 'digest'
-        ? R.renderDigest(user, tasks, { partnerName: partner?.name })
-        : R.renderList(user, tasks, cmd.filter, { partnerName: partner?.name, doneTasks });
+        ? R.renderDigest(user, tasks, o)
+        : R.renderList(user, tasks, cmd.filter, o);
       await db.setRefs(user.id, view.order);
       return view.text;
     }
 
     case 'done': {
       const { ids, missing } = await T.resolveRefs(user, cmd.refs);
-      const { done, repeated } = await T.completeTasks(user, ids);
+      const { done, repeated, already } = await T.completeTasks(user, ids);
       await notifyShared(user, done, 'done', deps);
+      await notifyAssigner(user, done, deps);
       const left = (await db.openTasksFor(user)).length;
-      let out = R.renderDone(done, repeated, { left });
+      let out = R.renderDone(done, repeated, { left, already, ...viewOpts(user, deps) });
       if (missing.length) out += `\n_לא מצאתי מספר ${missing.join(', ')} — שלח "רשימה" לרענון._`;
       return out;
     }
@@ -174,11 +201,14 @@ async function execActions(user, parsed, sourceText, deps) {
           // בלם על ה-AI: הוא מחזיר לפעמים שעה מדויקת (09:00) גם כשלא נאמרה שעה.
           // אם בטקסט המקורי אין שום אזכור של שעה — זו משימה ליום שלם.
           const timed = a.all_day === false && mentionsTime(sourceText);
+          const assigned = assigneeId(user, deps, a.assign);
           const spec = {
             title: a.title,
             due_at: normDue(a.due),
             all_day: !timed,
-            shared: a.shared === true || (user.default_shared && a.shared !== false),
+            // שיוך גורר שיתוף — אין שיוך בתוך אזור אישי
+            shared: a.shared === true || !!assigned || (user.default_shared && a.shared !== false),
+            assigned_to: assigned,
             recurrence: a.recurrence || null,
             notes: a.notes || null,
             source_text: sourceText,
@@ -188,13 +218,25 @@ async function execActions(user, parsed, sourceText, deps) {
           if (res.duplicate) { dupSpecs.push({ spec, existing: res.duplicate }); break; }
           addResults.push(res);
           if (res.task?.shared) await notifyShared(user, [res.task], 'add', deps);
+          if (res.task?.assigned_to) await notifyAssignment(user, [res.task], deps);
+          break;
+        }
+        case 'assign': {
+          const { ids } = await T.resolveRefs(user, [a.ref]);
+          if (!ids.length) break;
+          const changed = await T.setAssignee(user, ids, assigneeId(user, deps, a.to));
+          outputs.push(R.renderAssigned(changed, viewOpts(user, deps)));
+          await notifyAssignment(user, changed.map((c) => c.task), deps);
           break;
         }
         case 'complete': {
           const { ids } = await T.resolveRefs(user, [a.ref]);
-          const { done, repeated } = await T.completeTasks(user, ids);
+          const { done, repeated, already } = await T.completeTasks(user, ids);
           await notifyShared(user, done, 'done', deps);
-          if (done.length) outputs.push(R.renderDone(done, repeated));
+          await notifyAssigner(user, done, deps);
+          if (done.length || already.length) {
+            outputs.push(R.renderDone(done, repeated, { already, ...viewOpts(user, deps) }));
+          }
           break;
         }
         case 'snooze':
@@ -225,9 +267,10 @@ async function execActions(user, parsed, sourceText, deps) {
         case 'list': {
           const tasks = await db.openTasksFor(user);
           const doneTasks = a.filter === 'done' ? await db.recentlyDone(user) : null;
+          const o = { ...viewOpts(user, deps), doneTasks };
           const view = a.filter === 'digest' || !a.filter
-            ? R.renderDigest(user, tasks, { partnerName: partner?.name })
-            : R.renderList(user, tasks, a.filter, { partnerName: partner?.name, doneTasks });
+            ? R.renderDigest(user, tasks, o)
+            : R.renderList(user, tasks, a.filter, o);
           await db.setRefs(user.id, view.order);
           outputs.push(view.text);
           break;
@@ -240,7 +283,7 @@ async function execActions(user, parsed, sourceText, deps) {
     }
   }
 
-  if (addResults.length) outputs.unshift(R.renderAdded(addResults, { partnerName: partner?.name }));
+  if (addResults.length) outputs.unshift(R.renderAdded(addResults, viewOpts(user, deps)));
 
   if (dupSpecs.length) {
     await db.setState(user.id, {
@@ -266,6 +309,7 @@ async function addOne(user, spec, deps) {
     return { pendingPrompt: R.renderDuplicatePrompt(res.duplicate, spec) };
   }
   if (res.task?.shared) await notifyShared(user, [res.task], 'add', deps);
+  if (res.task?.assigned_to) await notifyAssignment(user, [res.task], deps);
   return res;
 }
 
@@ -278,9 +322,10 @@ async function resolvePending(user, pending, deps) {
     if (res.task) {
       results.push(res);
       if (res.task.shared) await notifyShared(user, [res.task], 'add', deps);
+      if (res.task.assigned_to) await notifyAssignment(user, [res.task], deps);
     }
   }
-  return R.renderAdded(results, { partnerName: partner?.name });
+  return R.renderAdded(results, viewOpts(user, deps));
 }
 
 function validPending(p) {
@@ -296,8 +341,37 @@ function normDue(due) {
 }
 
 // מודיע לצד השני על שינוי ברשימה המשותפת
+// הודעה לצד השני שהוטלה עליו משימה (פעם אחת בלבד לכל שיוך)
+async function notifyAssignment(actor, tasks, deps) {
+  const other = deps.partnerOf(actor);
+  if (!other) return;
+  for (const t of (tasks || [])) {
+    if (!t?.assigned_to || t.assigned_to !== other.id) continue;
+    if (t.assign_notified_at) continue;
+    await deps.notify(other, R.renderAssignedToYou(actor.name, t));
+    await db.updateTask(t.id, { assign_notified_at: new Date().toISOString() });
+  }
+}
+
+// הודעה למי שהטיל את המשימה, כשהיא בוצעה ע"י הצד השני
+async function notifyAssigner(actor, doneTasks, deps) {
+  const other = deps.partnerOf(actor);
+  if (!other) return;
+  for (const t of (doneTasks || [])) {
+    // רק כשמשימה הייתה משויכת למי שסימן, והמטיל הוא הצד השני
+    if (t.assigned_to !== actor.id) continue;
+    if (!t.created_by || t.created_by === actor.id) continue;
+    await deps.notify(other, R.renderAssignedDone(actor.name, t));
+  }
+}
+
 async function notifyShared(actor, tasks, kind, deps) {
-  const shared = (tasks || []).filter((t) => t.shared);
+  let shared = (tasks || []).filter((t) => t.shared);
+  // משימה שהוטלה עליי ע"י הצד השני — notifyAssigner כבר שולח הודעה
+  // עשירה יותר ("סיים את המשימה שהטלת"), אז לא מודיעים פעמיים.
+  if (kind === 'done') {
+    shared = shared.filter((t) => !(t.assigned_to === actor.id && t.created_by && t.created_by !== actor.id));
+  }
   if (!shared.length) return;
   const other = deps.partnerOf(actor);
   if (!other) return;

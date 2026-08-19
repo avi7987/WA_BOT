@@ -44,15 +44,22 @@ export async function addTask(user, spec, opts = {}) {
     if (sameDay.length >= 6) warnings.push(`זה כבר ${sameDay.length + 1} משימות לאותו יום — שווה לפזר.`);
   }
 
+  // שיוך קיים רק בתוך האזור המשותף — משימה משויכת היא תמיד משותפת.
+  const assignedTo = spec.assigned_to || null;
+  const shared = !!spec.shared || !!assignedTo;
+
   const task = await db.insertTask({
     title,
     notes: spec.notes || null,
     due_at: spec.due_at || null,
     all_day: spec.all_day !== false,
-    shared: !!spec.shared,
+    shared,
+    assigned_to: assignedTo,
+    assigned_at: assignedTo ? new Date().toISOString() : null,
     recurrence: spec.recurrence || null,
     created_by: user.id,
     owner_id: user.id,
+    last_updated_by: user.id,
     source_text: spec.source_text || null,
   });
 
@@ -82,11 +89,13 @@ function findTimeClash(tasks, when) {
 
 // ── סימון בוצע ──────────────────────────────────────────────────────
 export async function completeTasks(user, taskIds) {
-  const done = [], repeated = [];
+  const done = [], repeated = [], already = [];
   for (const id of taskIds) {
     const t = await db.getTask(id);
-    if (!t || t.status !== 'open') continue;
-    await db.updateTask(id, { status: 'done', done_at: new Date().toISOString(), done_by: user.id });
+    if (!t) continue;
+    // מישהו הקדים אותך — עדיף לומר מי ומתי מאשר "לא מצאתי"
+    if (t.status !== 'open') { if (t.status === 'done') already.push(t); continue; }
+    await db.updateTask(id, { status: 'done', done_at: new Date().toISOString(), done_by: user.id, last_updated_by: user.id });
     done.push(t);
     if (t.recurrence) {
       const next = nextOccurrence(t);
@@ -101,7 +110,30 @@ export async function completeTasks(user, taskIds) {
     }
   }
   if (done.length) await db.setState(user.id, { last_action: { kind: 'complete', task_ids: done.map((t) => t.id) } });
-  return { done, repeated };
+  return { done, repeated, already };
+}
+
+// ── שיוך בתוך האזור המשותף ──────────────────────────────────────────
+export async function setAssignee(user, taskIds, assigneeId) {
+  const changed = [];
+  for (const id of taskIds) {
+    const before = await db.getTask(id);
+    if (!before || before.status !== 'open') continue;
+    const t = await db.updateTask(id, {
+      assigned_to: assigneeId,
+      assigned_at: assigneeId ? new Date().toISOString() : null,
+      assign_notified_at: null,
+      shared: true,               // שיוך גורר שיתוף — אין שיוך באזור אישי
+      last_updated_by: user.id,
+    });
+    if (t) changed.push({ task: t, before: before.assigned_to });
+  }
+  if (changed.length) {
+    await db.setState(user.id, {
+      last_action: { kind: 'assign', task_ids: changed.map((c) => c.task.id), before: changed.map((c) => c.before) },
+    });
+  }
+  return changed;
 }
 
 export function nextOccurrence(task) {
@@ -189,6 +221,11 @@ export async function undoLast(user) {
       break;
     case 'share':
       for (const id of la.task_ids) await db.updateTask(id, { shared: !!la.before });
+      break;
+    case 'assign':
+      for (let i = 0; i < la.task_ids.length; i++) {
+        await db.updateTask(la.task_ids[i], { assigned_to: la.before?.[i] ?? null });
+      }
       break;
     default:
       return null;

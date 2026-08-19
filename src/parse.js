@@ -286,12 +286,43 @@ function numbers(s) {
     .filter((n) => Number.isInteger(n) && n > 0 && n < 1000);
 }
 
+// ── שיוך ורמזי שיתוף, בלי AI ────────────────────────────────────────
+/**
+ * names = { ownerName, partnerName }
+ * מחזיר { assign: 'me'|'partner'|null, shared: bool, cleaned }
+ * שיוך תמיד גורר שיתוף — אין שיוך בתוך אזור אישי.
+ */
+export function extractAssignee(text, names = {}) {
+  let s = String(text || '');
+  const esc = (x) => String(x || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const p = names.partnerName ? esc(names.partnerName) : null;
+  const o = names.ownerName ? esc(names.ownerName) : null;
+
+  const strip = (re) => { const m = re.exec(s); if (m) s = (s.slice(0, m.index) + ' ' + s.slice(m.index + m[0].length)).replace(/\s+/g, ' ').trim(); return !!m; };
+
+  if (p) {
+    // "תטיל על איה ..." / "שאיה ..." / "תבקש מאיה ..." / "איה — ..."
+    const forPartner = new RegExp(`(תטיל על ${p}|תעביר ל${p}|תבקש מ${p}|ש${p}\\s|${p}\\s*[—–-]\\s*|בשביל ${p}|על ${p}\\s)`);
+    if (strip(forPartner)) return { assign: 'partner', shared: true, cleaned: s };
+  }
+  if (o) {
+    const forMe = new RegExp(`(אני א[קט]\\S*|אני מטפל\\S*|ש?${o}\\s*[—–-]\\s*|עליי\\b)`);
+    if (strip(forMe)) return { assign: 'me', shared: true, cleaned: s };
+  }
+  // בלי שיוך מפורש, אבל ניסוח שמרמז על שניהם
+  if (/(צריך שמישהו|שמישהו מאיתנו|אנחנו צריכים|אנחנו חייבים)/.test(s)) {
+    return { assign: null, shared: true, cleaned: s.replace(/(צריך שמישהו|שמישהו מאיתנו|אנחנו צריכים|אנחנו חייבים)/, '').trim() };
+  }
+  return { assign: null, shared: false, cleaned: s };
+}
+
 // ── ניסוח משימה מטקסט חופשי, בלי AI ─────────────────────────────────
-export function parseTaskFallback(text, now = new Date()) {
+export function parseTaskFallback(text, now = new Date(), names = {}) {
   let s = String(text || '').trim();
   // מסירים פתיחים נפוצים
   s = s.replace(/^(תזכיר לי|תזכירי לי|תזכורת|צריך|צריכה|אני צריך|אני צריכה|יש לי|לזכור|תוסיף|תוסיפי|הוסף|משימה)[\s:,-]*/i, '');
 
+  const asg = extractAssignee(s, names); s = asg.cleaned;
   const sh = extractShared(s); s = sh.cleaned;
   const rec = extractRecurrence(s); s = rec.cleaned;
   const due = extractDue(s, now);
@@ -302,7 +333,8 @@ export function parseTaskFallback(text, now = new Date()) {
     title: title.slice(0, 200),
     due_at: due.due ? due.due.toISOString() : null,
     all_day: due.allDay,
-    shared: sh.shared,
+    shared: sh.shared || asg.shared,
+    assign: asg.assign,
     recurrence: rec.recurrence,
   };
 }

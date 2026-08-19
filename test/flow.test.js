@@ -14,6 +14,7 @@ db.__setClientForTests(createFakeSupabase());
 
 const { handleMessage } = await import('../src/brain.js');
 const R = await import('../src/render.js');
+const T = await import('../src/tasks.js');
 
 let owner, partner;
 const sent = [];                           // הודעות שנשלחו לצד השני
@@ -24,8 +25,8 @@ const deps = {
 };
 
 test('הקמה', async () => {
-  owner = await db.upsertUser('owner', { name: 'אבישי', role: 'owner', sees_own_tasks: true, default_shared: false });
-  partner = await db.upsertUser('partner', { name: 'איה', role: 'member', sees_own_tasks: false, default_shared: true });
+  owner = await db.upsertUser('owner', { name: 'אבי', role: 'owner', sees_own_tasks: true, default_shared: false });
+  partner = await db.upsertUser('partner', { name: 'איה', role: 'member', sees_own_tasks: true, default_shared: false });
   assert.ok(owner.id && partner.id);
 });
 
@@ -78,22 +79,32 @@ test('משימה משותפת מגיעה גם לצד השני', async () => {
   assert.equal(sent[0].to, 'partner');
   assert.match(sent[0].text, /מסעדה/);
 
-  // אצל בת הזוג מופיעה רק הרשימה המשותפת
   const hers = await db.openTasksFor(partner);
-  assert.equal(hers.length, 1);
-  assert.match(hers[0].title, /מסעדה/);
+  assert.ok(hers.some((t) => /מסעדה/.test(t.title)), "איה רואה את המשותפת");
 });
 
-test('משימה שבת הזוג מוסיפה נכנסת אוטומטית למשותף', async () => {
+test('איה כותבת בניסוח שמרמז על אבי — נכנס למשותף ומשויך אליו', async () => {
   sent.length = 0;
-  await handleMessage(partner, 'לאסוף את הילדים ביום ראשון', deps);
+  await handleMessage(partner, 'שאבי יאסוף את הילדים ביום ראשון', deps);
   const hers = await db.openTasksFor(partner);
-  assert.equal(hers.length, 2);
-  assert.ok(hers.every((t) => t.shared));
+  const t = hers.find((x) => /ילדים/.test(x.title));
+  assert.ok(t, 'נוצרה');
+  assert.equal(t.shared, true, 'הוסק מההקשר שזה משותף, בלי המילה משותף');
+  assert.equal(t.assigned_to, owner.id, 'שויכה לאבי');
   assert.equal(sent[0].to, 'owner');
 
   const mine = await db.openTasksFor(owner);
-  assert.ok(mine.some((t) => /ילדים/.test(t.title)));
+  assert.ok(mine.some((x) => /ילדים/.test(x.title)), 'אבי רואה אותה');
+});
+
+test('משימה שאיה כותבת סתם נשארת אישית שלה', async () => {
+  await handleMessage(partner, 'לקבוע תור לספרית', deps);
+  const hers = await db.openTasksFor(partner);
+  const t = hers.find((x) => /ספרית/.test(x.title));
+  assert.ok(t);
+  assert.equal(t.shared, false);
+  const mine = await db.openTasksFor(owner);
+  assert.equal(mine.some((x) => /ספרית/.test(x.title)), false, 'אבי לא רואה את האישית שלה');
 });
 
 test('דחייה ומחיקה', async () => {
@@ -115,7 +126,7 @@ test('סיכום הבוקר נבנה בלי שגיאות וכולל את כל ה
   await handleMessage(owner, 'לחדש ביטוח באיחור', deps);
   const tasks = await db.openTasksFor(owner);
   const view = R.renderDigest(owner, tasks, { partnerName: 'איה' });
-  assert.match(view.text, /בוקר טוב, אבישי/);
+  assert.match(view.text, /בוקר טוב, אבי/);
   assert.equal(view.order.length > 0, true);
   // כל משימה מופיעה בדיוק פעם אחת ברשימה הממוספרת
   assert.equal(new Set(view.order).size, view.order.length);
@@ -138,4 +149,57 @@ test('עזרה נשלחת בלי לשבור כלום', async () => {
   const help = await handleMessage(owner, 'עזרה', deps);
   assert.match(help, /איך מדברים איתי/);
   assert.match(help, /איה/);
+});
+
+// ── מודל שלושת האזורים ושיוך (גרסה 2) ──────────────────────────────
+test('אזור אישי — הצד השני לא רואה ולא יכול לגעת', async () => {
+  await handleMessage(owner, 'לקנות מתנה לאמא שלי', deps);
+  const mine = await db.openTasksFor(owner);
+  const priv = mine.find((t) => /מתנה לאמא/.test(t.title));
+  assert.ok(priv, 'המשימה נוצרה אצל אבי');
+  assert.equal(priv.shared, false);
+
+  const hers = await db.openTasksFor(partner);
+  assert.equal(hers.some((t) => /מתנה לאמא/.test(t.title)), false, 'איה לא רואה משימה אישית של אבי');
+});
+
+test('שיוך לצד השני נכנס למשותף ומסומן בטיפולו', async () => {
+  sent.length = 0;
+  const spec = { title: 'לקחת את הדואר', assigned_to: partner.id, source_text: 'test' };
+  const res = await T.addTask(owner, spec);
+  assert.ok(res.task, 'נוצרה');
+  assert.equal(res.task.shared, true, 'שיוך גורר שיתוף אוטומטית');
+  assert.equal(res.task.assigned_to, partner.id);
+
+  const hers = await db.openTasksFor(partner);
+  assert.ok(hers.some((t) => t.id === res.task.id), 'איה רואה אותה');
+});
+
+test('שיוך משנה משימה קיימת ומעביר אותה למשותף', async () => {
+  const res = await T.addTask(owner, { title: 'להחליף נורה בסלון', source_text: 't' });
+  assert.equal(res.task.shared, false);
+  const changed = await T.setAssignee(owner, [res.task.id], partner.id);
+  assert.equal(changed.length, 1);
+  assert.equal(changed[0].task.shared, true, 'הפכה למשותפת');
+  assert.equal(changed[0].task.assigned_to, partner.id);
+});
+
+test('סימון משימה שכבר בוצעה מדווח מי ומתי, לא "לא מצאתי"', async () => {
+  const res = await T.addTask(owner, { title: 'להזמין פיצה', shared: true, source_text: 't' });
+  await T.completeTasks(partner, [res.task.id]);          // איה הקדימה
+  const { done, already } = await T.completeTasks(owner, [res.task.id]);
+  assert.equal(done.length, 0);
+  assert.equal(already.length, 1);
+  const txt = R.renderDone(done, [], { already, nameOf: (id) => (id === partner.id ? 'איה' : 'אבי') });
+  assert.match(txt, /כבר סומנה/);
+  assert.match(txt, /איה/);
+});
+
+test('ביטול מחזיר שיוך קודם', async () => {
+  const res = await T.addTask(owner, { title: 'לתאם ביקור', shared: true, source_text: 't' });
+  await T.setAssignee(owner, [res.task.id], partner.id);
+  const la = await T.undoLast(owner);
+  assert.equal(la.kind, 'assign');
+  const after = await db.getTask(res.task.id);
+  assert.equal(after.assigned_to, null);
 });

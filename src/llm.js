@@ -30,10 +30,12 @@ export function providerName() {
 function systemPrompt(ctx) {
   const p = ilParts();
   const nowStr = `${HEB_DAYS[p.wd]}, ${p.d}.${p.m}.${p.y} ${String(p.h).padStart(2, '0')}:${String(p.min).padStart(2, '0')}`;
+  const who = (id) => (id === ctx.userId ? ctx.userName : id ? ctx.partnerName : null);
   const list = ctx.tasks.length
     ? ctx.tasks.map((t, i) => {
       const due = t.due_at ? (t.all_day ? fmtDate(new Date(t.due_at)) : `${fmtDate(new Date(t.due_at))} ${fmtTime(new Date(t.due_at))}`) : 'ללא תאריך';
-      return `${i + 1}. ${t.title} — ${due}${t.shared ? ' [משותפת]' : ''}`;
+      const zone = t.shared ? '[משותפת' + (t.assigned_to ? `, בטיפול ${who(t.assigned_to)}` : '') + ']' : '[אישית]';
+      return `${i + 1}. ${t.title} — ${due} ${zone}`;
     }).join('\n')
     : '(אין משימות פתוחות)';
 
@@ -55,12 +57,13 @@ Return ONLY valid JSON, no markdown fences, in this exact shape:
 }
 
 Allowed actions:
-{"type":"add","title":"...","due":"ISO-8601 with +02:00/+03:00 offset or null","all_day":true|false,"shared":true|false,"recurrence":"daily"|"weekly"|"monthly"|"yearly"|null,"notes":"...|null"}
+{"type":"add","title":"...","due":"ISO-8601 with +02:00/+03:00 offset or null","all_day":true|false,"shared":true|false,"assign":"me"|"partner"|null,"recurrence":"daily"|"weekly"|"monthly"|"yearly"|null,"notes":"...|null"}
 {"type":"complete","ref": <number from the list above> | "<task title>"}
 {"type":"snooze","ref": <number|title>, "due":"ISO-8601", "all_day":true|false}
 {"type":"delete","ref": <number|title>}
 {"type":"update","ref": <number|title>, "title":"...|null", "due":"ISO-8601|null", "all_day":true|false, "shared":true|false}
-{"type":"list","filter":"digest"|"today"|"tomorrow"|"week"|"overdue"|"all"|"shared"|"done"}
+{"type":"assign","ref": <number|title>, "to":"me"|"partner"|null}
+{"type":"list","filter":"digest"|"today"|"tomorrow"|"week"|"overdue"|"all"|"shared"|"done"|"mine_assigned"|"partner_assigned"}
 {"type":"none"}
 
 RULES
@@ -68,12 +71,26 @@ RULES
 2. Resolve every relative date against the current date above. "מחר" = tomorrow, "יום ראשון" = the NEXT Sunday, "בעוד שבועיים" = +14 days.
 3. If no time of day was stated, set "all_day": true and use 09:00 as the hour.
 4. "title" must be a short clean action phrase in Hebrew, WITHOUT the date words and WITHOUT filler like "תזכיר לי". Keep the user's own wording otherwise. Never invent details.
-5. Mark "shared": true only when the user clearly means both of them (משותף / ביחד / שנינו / עם ${ctx.partnerName || 'בן הזוג'}). Otherwise false.${ctx.defaultShared ? '\n   NOTE: for THIS user the default is shared:true unless they say it is private (פרטי / רק שלי).' : ''}
-6. If the user reports finishing something ("סיימתי עם הארנונה", "שילמתי"), emit "complete" and match it to the closest task by meaning — use its number.
-7. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
-8. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
-9. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.
-10. Never output explanations, markdown, or text outside the JSON object.`;
+5. ZONES — this is the most important rule. There are exactly three zones:
+   - "${ctx.userName}"'s private zone, "${ctx.partnerName || 'the partner'}"'s private zone, and one SHARED zone.
+   - Neither person can ever write into the other's private zone. A task concerning the other person ALWAYS goes to the shared zone.
+   - Default is PRIVATE ("shared": false). Set "shared": true whenever the message implies the other person or both of them — you must infer this from meaning, NOT from the literal word "משותף". Examples that are shared:
+     • "צריך שמישהו יקנה חלב"            → shared, assign: null
+     • "אנחנו צריכים להזמין מסעדה"        → shared, assign: null
+     • "ש${ctx.partnerName || 'בן הזוג'} יאסוף את הילד ב-4"  → shared, assign: "partner"
+     • "תטיל על ${ctx.partnerName || 'בן הזוג'} לקחת את הדואר" → shared, assign: "partner"
+     • "${ctx.partnerName || 'בן הזוג'} — להזמין תור לרופא"   → shared, assign: "partner"
+     • "משותף / ביחד / שנינו"             → shared, assign: null
+   - Examples that stay private: "לקנות מתנה לאמא שלי", "לשלם ארנונה", "פגישה עם רו״ח".
+6. ASSIGNMENT — "assign" says who handles a shared task: "me" = ${ctx.userName}, "partner" = ${ctx.partnerName || 'the partner'}, null = both/unspecified.
+   - Setting "assign" ALWAYS forces "shared": true. Assignment exists only inside the shared zone.
+   - "אני אקח את זה" / "אני אטפל" on an existing task → {"type":"assign","ref":N,"to":"me"}.
+   - "תעביר את זה ל${ctx.partnerName || 'בן הזוג'}" → {"type":"assign","ref":N,"to":"partner"}.
+7. If the user reports finishing something ("סיימתי עם הארנונה", "שילמתי"), emit "complete" and match it to the closest task by meaning — use its number.
+8. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
+9. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
+10. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.
+11. Never output explanations, markdown, or text outside the JSON object.`;
 }
 
 // ── פענוח הודעה ─────────────────────────────────────────────────────

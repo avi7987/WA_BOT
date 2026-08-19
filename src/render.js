@@ -27,12 +27,14 @@ function footer(lines) {
   return lines;
 }
 
-// שורת משימה בודדת
-function line(t, n, mode = 'default', now = new Date()) {
+// שורת משימה בודדת.
+// opts.nameOf ממפה מזהה-משתמש לשם, כדי לסמן "בטיפול מי" במקטע המשותף.
+function line(t, n, mode = 'default', now = new Date(), opts = {}) {
   const badges = [];
   if (t.shared && mode !== 'shared') badges.push('👥');   // בתוך המקטע המשותף זה מיותר
   if (t.recurrence) badges.push('🔁');
-  const tail = badges.length ? ' ' + badges.join('') : '';
+  const who = t.assigned_to && opts.nameOf ? opts.nameOf(t.assigned_to) : null;
+  const tail = (badges.length ? ' ' + badges.join('') : '') + (who ? `  👤 ${who}` : '');
 
   let prefix = '';
   if (t.due_at) {
@@ -49,12 +51,12 @@ function line(t, n, mode = 'default', now = new Date()) {
 }
 
 // מקטע ברשימה. order צובר את סדר המשימות, וכל שורה מקבלת את המספר הבא בתור.
-function block(title, items, order, mode, now) {
+function block(title, items, order, mode, now, opts = {}) {
   if (!items.length) return [];
   const out = [rtl(`*${title}* (${items.length})`)];
   for (const t of items) {
     order.push(t.id);
-    out.push(line(t, order.length, mode, now));
+    out.push(line(t, order.length, mode, now, opts));
   }
   return out;
 }
@@ -85,7 +87,7 @@ export function renderDigest(user, tasks, opts = {}) {
 
   if (shared.length) {
     const label = opts.partnerName ? `👥 משותף עם ${opts.partnerName}` : '👥 הרשימה המשותפת';
-    lines.push(...block(label, sortForShared(shared, now), order, 'shared', now));
+    lines.push(...block(label, sortForShared(shared, now, user.id), order, 'shared', now, opts));
     lines.push(SEP);
   }
 
@@ -121,8 +123,13 @@ export function renderDigest(user, tasks, opts = {}) {
   return { text: lines.join('\n'), order };
 }
 
-function sortForShared(arr, now) {
+// במשותף: קודם מה שעליי, אחר כך מה שעל שנינו, ולבסוף מה שבטיפול הצד השני.
+// בתוך כל קבוצה — לפי תאריך.
+function sortForShared(arr, now, viewerId) {
+  const rank = (t) => (t.assigned_to === viewerId ? 0 : !t.assigned_to ? 1 : 2);
   return [...arr].sort((a, b2) => {
+    const r = rank(a) - rank(b2);
+    if (r) return r;
     const av = a.due_at ? new Date(a.due_at).getTime() : Infinity;
     const bv = b2.due_at ? new Date(b2.due_at).getTime() : Infinity;
     return av - bv;
@@ -137,7 +144,7 @@ export function renderList(user, tasks, filter, opts = {}) {
   const lines = [];
 
   const push = (title, items, mode) => {
-    lines.push(...block(title, items, order, mode, now));
+    lines.push(...block(title, items, order, mode, now, opts));
     if (items.length) lines.push(SEP);
   };
 
@@ -170,7 +177,21 @@ export function renderList(user, tasks, filter, opts = {}) {
       const sh = tasks.filter((t) => t.shared);
       lines.push(rtl(opts.partnerName ? `*👥 הרשימה המשותפת עם ${opts.partnerName}*` : '*👥 הרשימה המשותפת*'));
       lines.push(SEP);
-      push('משותף', sortForShared(sh, now), 'default');
+      push('משותף', sortForShared(sh, now, user.id), 'shared');
+      break;
+    }
+    case 'mine_assigned': {
+      const mine = tasks.filter((t) => t.shared && t.assigned_to === user.id);
+      lines.push(rtl('*👤 מה שבטיפולי מהמשותף*'));
+      lines.push(SEP);
+      push('בטיפולי', sortForShared(mine, now, user.id), 'shared');
+      break;
+    }
+    case 'partner_assigned': {
+      const theirs = tasks.filter((t) => t.shared && t.assigned_to && t.assigned_to !== user.id);
+      lines.push(rtl(`*👤 מה שבטיפול ${opts.partnerName || 'הצד השני'}*`));
+      lines.push(SEP);
+      push(`בטיפול ${opts.partnerName || ''}`.trim(), sortForShared(theirs, now, user.id), 'shared');
       break;
     }
     case 'done': {
@@ -212,7 +233,10 @@ export function renderAdded(results, opts = {}) {
     const t = added[0];
     lines.push(rtl(`✅ *${t.title}*`));
     lines.push(rtl(dueLine(t)));
-    if (t.shared) lines.push(rtl(`👥 משותף${opts.partnerName ? ` עם ${opts.partnerName}` : ''}`));
+    if (t.shared) {
+      const who = t.assigned_to && opts.nameOf ? opts.nameOf(t.assigned_to) : null;
+      lines.push(rtl(`👥 משותף${opts.partnerName ? ` עם ${opts.partnerName}` : ''}${who ? ` · בטיפול ${who}` : ''}`));
+    }
     if (t.recurrence) lines.push(rtl(`🔁 ${recurrenceWord(t.recurrence)}`));
   } else {
     lines.push(rtl(`✅ נוספו ${added.length} משימות:`));
@@ -246,6 +270,16 @@ export function recurrenceWord(r) {
 
 export function renderDone(done, repeated, opts = {}) {
   const lines = [];
+  const already = opts.already || [];
+
+  // מישהו הקדים אותך — אומרים מי ומתי, במקום "לא מצאתי"
+  if (!done.length && already.length) {
+    return already.map((t) => {
+      const who = t.done_by && opts.nameOf ? opts.nameOf(t.done_by) : null;
+      const when = t.done_at ? agoText(new Date(t.done_at)) : null;
+      return rtl(`✔️ "${t.title}" כבר סומנה כבוצעה${who ? ` ע"י ${who}` : ''}${when ? ` ${when}` : ''}.`);
+    }).join('\n');
+  }
   if (!done.length) return 'לא מצאתי מה לסמן. שלח "רשימה" כדי לראות את המספרים העדכניים.';
   if (done.length === 1) lines.push(rtl(`✔️ בוצע: *${done[0].title}*`));
   else {
@@ -290,8 +324,14 @@ export function renderHelp(opts = {}) {
     rtl('_"פגישה עם רו״ח מחר ב-14:00"_'),
     rtl('_"להוציא את הכלב כל יום ב-7 בבוקר"_ (חוזר)'),
     '',
-    rtl(`*רשימה משותפת עם ${p}* — תוסיף את המילה "משותף":`),
-    rtl('_"משותף — להזמין מסעדה ליום שישי"_'),
+    rtl(`*מה שנוגע ל${p}* — פשוט תנסח את זה טבעי, אני מבין מההקשר:`),
+    rtl('_"צריך שמישהו יקנה חלב"_ — נכנס למשותף'),
+    rtl(`_"ש${p} תיקח את הדואר מחר"_ — משותף, בטיפול ${p}`),
+    rtl(`_"תטיל על ${p} לתאם תור לרופא"_ — משותף, בטיפול ${p}`),
+    rtl('_"אני אקח את זה"_ — עובר לטיפול שלך'),
+    '',
+    rtl('*שלושה אזורים:* מה שאתה כותב סתם נשאר *אישי* ורק אתה רואה אותו.'),
+    rtl(`מה שנוגע לשניכם נכנס ל*משותף*. ל${p} יש אזור אישי משלה שאתה לא רואה.`),
     '',
     rtl('*לסמן שבוצע* — ענה במספר מהרשימה:'),
     rtl('_"1"_  ·  _"1,3"_  ·  _"סיימתי עם הארנונה"_'),
@@ -323,5 +363,46 @@ export function renderPartnerNotice(actorName, task, kind) {
   if (kind === 'done') return rtl(`✔️ ${actorName} סימן/ה שבוצע: *${task.title}*`);
   if (kind === 'add') return rtl(`👥 ${actorName} הוסיף/ה לרשימה המשותפת: *${task.title}* — ${dueLine(task, true)}`);
   if (kind === 'delete') return rtl(`🗑️ ${actorName} מחק/ה מהרשימה המשותפת: *${task.title}*`);
+  if (kind === 'snooze') return rtl(`🕗 ${actorName} דחה/תה את *${task.title}* ל-${dueLine(task, true)}`);
   return '';
+}
+
+// משימה משותפת שהוטלה עליך
+export function renderAssignedToYou(actorName, task) {
+  return [
+    rtl(`📥 *${actorName} הטיל/ה עליך משימה*`),
+    rtl(`${task.title}`),
+    rtl(dueLine(task)),
+    '',
+    rtl('_היא נמצאת ברשימה המשותפת שלכם. ענה במספר שלה כשתסיים._'),
+  ].join('\n');
+}
+
+// המשימה שהטלת בוצעה
+export function renderAssignedDone(doerName, task) {
+  return rtl(`✅ ${doerName} סיים/ה את המשימה שהטלת: *${task.title}*`);
+}
+
+export function renderAssigned(changed, opts = {}) {
+  if (!changed.length) return 'לא מצאתי את המשימה.';
+  return changed.map(({ task }) => {
+    const who = task.assigned_to && opts.nameOf ? opts.nameOf(task.assigned_to) : null;
+    return rtl(who
+      ? `👤 "${task.title}" — בטיפול ${who} (ברשימה המשותפת)`
+      : `👥 "${task.title}" חזרה להיות על שניכם`);
+  }).join('\n');
+}
+
+// "לפני 3 דקות" / "לפני שעתיים" / "אתמול"
+function agoText(date, now = new Date()) {
+  const min = Math.round((now - date) / 60000);
+  if (min < 1) return 'ממש עכשיו';
+  if (min === 1) return 'לפני דקה';
+  if (min < 60) return `לפני ${min} דקות`;
+  const hrs = Math.round(min / 60);
+  if (hrs === 1) return 'לפני שעה';
+  if (hrs === 2) return 'לפני שעתיים';
+  if (hrs < 24) return `לפני ${hrs} שעות`;
+  const days = Math.round(hrs / 24);
+  return days === 1 ? 'אתמול' : `לפני ${days} ימים`;
 }
