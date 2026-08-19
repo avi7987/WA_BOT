@@ -11,6 +11,7 @@ const DEFAULTS = {
   pa_state: () => ({ pending: null, last_action: null, updated_at: new Date().toISOString() }),
   pa_log: () => ({ id: Math.random(), day: new Date().toISOString().slice(0, 10), sent_at: new Date().toISOString() }),
   pa_settings: () => ({}),
+  pa_notes: () => ({ id: Math.random(), created_at: new Date().toISOString() }),
 };
 
 const UNIQUE = {

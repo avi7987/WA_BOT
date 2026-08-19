@@ -34,7 +34,11 @@ function line(t, n, mode = 'default', now = new Date(), opts = {}) {
   if (t.shared && mode !== 'shared') badges.push('👥');   // בתוך המקטע המשותף זה מיותר
   if (t.recurrence) badges.push('🔁');
   const who = t.assigned_to && opts.nameOf ? opts.nameOf(t.assigned_to) : null;
-  const tail = (badges.length ? ' ' + badges.join('') : '') + (who ? `  👤 ${who}` : '');
+  // הערות מתקפלות לסימון בלבד — הן כבר נדחפו בזמן אמת כשנכתבו
+  const notes = opts.noteCounts?.get(t.id) || 0;
+  const tail = (badges.length ? ' ' + badges.join('') : '')
+    + (who ? `  👤 ${who}` : '')
+    + (notes ? `  💬${notes > 1 ? notes : ''}` : '');
 
   let prefix = '';
   if (t.due_at) {
@@ -336,6 +340,14 @@ export function renderHelp(opts = {}) {
     rtl('*לסמן שבוצע* — ענה במספר מהרשימה:'),
     rtl('_"1"_  ·  _"1,3"_  ·  _"סיימתי עם הארנונה"_'),
     '',
+    rtl('*הערות על משימה* — מידע נוסף, בלי להעמיס את הרשימה:'),
+    rtl('_"הערה 3: כבר קניתי חלב, צריך רק לחם"_'),
+    rtl(`ההערה נשלחת מיד ל${p} אם המשימה משותפת, ואז מתקפלת לסימון 💬 ליד המשימה.`),
+    rtl('_"הערות 3"_ — לראות את כל ההערות על משימה'),
+    '',
+    rtl('*תזכורות* — משימה עם שעה מקבלת תזכורת 15 דקות לפני,'),
+    rtl('ואפשר לענות עליה: _1_ = בוצע · _2_ = דחה בשעה · _3_ = דחה למחר'),
+    '',
     rtl('*פקודות שימושיות:*'),
     rtl('• _רשימה_ — כל מה שפתוח'),
     rtl('• _היום_ / _מחר_ / _השבוע_ / _באיחור_'),
@@ -350,13 +362,26 @@ export function renderHelp(opts = {}) {
   ].join('\n');
 }
 
-export function renderReminder(task) {
-  const d = new Date(task.due_at);
-  return [
+/**
+ * תזכורת עם תשובות ממוספרות.
+ * וואטסאפ לא מאפשר לחצנים דרך חיבור מכשיר-מקושר (זו תכונה של ה-API
+ * העסקי הרשמי), אז מספרים הם התחליף הקרוב ביותר במספר ההקשות.
+ */
+export function renderReminder(task, opts = {}) {
+  const d = task.due_at ? new Date(task.due_at) : null;
+  const lead = opts.leadMinutes;
+  const when = !d ? ''
+    : lead > 0 ? `בעוד ${lead} דקות · ${fmtTime(d)}`
+      : `עכשיו · ${fmtTime(d)}`;
+  const lines = [
     rtl('⏰ *תזכורת*'),
-    rtl(`${task.title}`),
-    rtl(`_${task.all_day ? 'להיום' : `עכשיו, ${fmtTime(d)}`}_`),
-  ].join('\n');
+    rtl(`*${task.title}*`),
+  ];
+  if (when) lines.push(rtl(`_${when}_`));
+  if (opts.assignedName) lines.push(rtl(`_בטיפול ${opts.assignedName}_`));
+  lines.push(SEP);
+  lines.push(rtl('1 = בוצע   2 = דחה בשעה   3 = דחה למחר'));
+  return lines.join('\n');
 }
 
 export function renderPartnerNotice(actorName, task, kind) {
@@ -365,6 +390,45 @@ export function renderPartnerNotice(actorName, task, kind) {
   if (kind === 'delete') return rtl(`🗑️ ${actorName} מחק/ה מהרשימה המשותפת: *${task.title}*`);
   if (kind === 'snooze') return rtl(`🕗 ${actorName} דחה/תה את *${task.title}* ל-${dueLine(task, true)}`);
   return '';
+}
+
+// ── הערות ───────────────────────────────────────────────────────────
+export function renderNotes(task, notes, opts = {}) {
+  if (!notes.length) return rtl(`אין הערות על "${task.title}".`);
+  const lines = [rtl(`💬 *${task.title}*`), SEP];
+  for (const n of notes) {
+    const who = n.author_id && opts.nameOf ? opts.nameOf(n.author_id) : null;
+    const when = n.created_at ? agoText(new Date(n.created_at)) : '';
+    lines.push(rtl(`• ${n.body}`));
+    lines.push(rtl(`  _${[who, when].filter(Boolean).join(' · ')}_`));
+  }
+  return lines.join('\n');
+}
+
+export function renderNoteAdded(task, opts = {}) {
+  const n = opts.count || 1;
+  return rtl(`💬 ההערה נשמרה על "${task.title}"${n > 1 ? ` (${n} הערות)` : ''}.`);
+}
+
+// הערה חדשה שהצד השני כתב — נדחפת מיד, כדי שלא תתגלה מאוחר מדי
+export function renderNoteFromPartner(actorName, task, body) {
+  return [
+    rtl(`💬 *${actorName} הוסיף/ה הערה*`),
+    rtl(`על: ${task.title}`),
+    '',
+    rtl(`"${body}"`),
+  ].join('\n');
+}
+
+// ── שאלת הבהרה ──────────────────────────────────────────────────────
+export function renderDisambiguation(query, candidates, verb) {
+  const lines = [rtl(`🤔 יש כמה שמתאימות ל"${query}". על איזו התכוונת?`), SEP];
+  candidates.forEach((t, i) => {
+    lines.push(rtl(`${i + 1} · ${t.title}${t.due_at ? ` — ${dueLine(t, true)}` : ''}`));
+  });
+  lines.push(SEP);
+  lines.push(rtl(`_ענה במספר, או "בטל" כדי לוותר._${verb ? ` _(${verb})_` : ''}`));
+  return lines.join('\n');
 }
 
 // משימה משותפת שהוטלה עליך

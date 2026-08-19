@@ -59,7 +59,12 @@ async function maybeDigest(user, deps, when) {
   if (when === 'evening' && !tasks.some((t) => t.due_at && daysFromToday(new Date(t.due_at)) <= 0)) return;
 
   const partner = deps.partnerOf(user);
-  const view = R.renderDigest(user, tasks, { partnerName: partner?.name, evening: when === 'evening' });
+  const view = R.renderDigest(user, tasks, {
+    partnerName: partner?.name,
+    nameOf: (id) => (id === user.id ? user.name : (partner && id === partner.id ? partner.name : null)),
+    noteCounts: await db.noteCounts(tasks.map((t) => t.id)),
+    evening: when === 'evening',
+  });
   await db.setRefs(user.id, view.order);
   await deps.sendTo(user, view.text);
   console.log(`📤 סיכום ${when === 'morning' ? 'בוקר' : 'ערב'} נשלח ל-${user.name}`);
@@ -69,31 +74,53 @@ async function maybeDigest(user, deps, when) {
 async function runReminders(deps) {
   if (!withinQuietWindow()) return;
 
+  const lead = Number(await db.getSetting('remind_lead_minutes', 15)) || 0;
   const tasks = await db.allOpenTasks();
   const now = Date.now();
   const users = deps.users();
   const byId = new Map(users.map((u) => [u.id, u]));
+  const nameOf = (id) => byId.get(id)?.name || null;
 
   for (const t of tasks) {
     if (!t.due_at || t.all_day || t.remind_sent_at) continue;
+
     const due = new Date(t.due_at).getTime();
-    if (due > now) continue;                    // עוד לא הגיע הזמן
-    if (now - due > 30 * 60e3) {                // עבר יותר מחצי שעה — לא מציקים באיחור
+    const fireAt = due - lead * 60e3;
+    if (now < fireAt) continue;                          // עוד מוקדם
+
+    // עבר יותר מדי זמן מהמועד — אין טעם להקפיץ תזכורת שכבר לא רלוונטית
+    if (now - due > 30 * 60e3) {
       await db.updateTask(t.id, { remind_sent_at: new Date().toISOString() });
       continue;
     }
 
-    const targets = [];
-    const owner = byId.get(t.owner_id);
-    if (owner) targets.push(owner);
-    if (t.shared) {
-      for (const u of users) if (u.id !== t.owner_id && !targets.includes(u)) targets.push(u);
+    // מי מקבל: הבעלים, ובמשותפת גם הצד השני.
+    // אם המשימה משויכת למישהו — הוא לבדו מקבל אותה.
+    let targets;
+    if (t.shared && t.assigned_to) {
+      targets = [byId.get(t.assigned_to)].filter(Boolean);
+    } else {
+      targets = [];
+      const owner = byId.get(t.owner_id);
+      if (owner) targets.push(owner);
+      if (t.shared) for (const u of users) if (u.id !== t.owner_id) targets.push(u);
     }
     if (!targets.length) continue;
 
     await db.updateTask(t.id, { remind_sent_at: new Date().toISOString() });
+    const minutesLeft = Math.max(0, Math.round((due - Date.now()) / 60e3));
+
     for (const u of targets) {
-      try { await deps.sendTo(u, R.renderReminder(t)); } catch (e) { console.error('תזכורת:', e.message); }
+      try {
+        await deps.sendTo(u, R.renderReminder(t, {
+          leadMinutes: minutesLeft,
+          assignedName: t.assigned_to && t.assigned_to !== u.id ? nameOf(t.assigned_to) : null,
+        }));
+        // הקשר קצר-מועד: 1/2/3 בתשובה מתייחסים למשימה הזו
+        await db.setState(u.id, {
+          pending: { kind: 'reminder_actions', task_id: t.id, expires_at: Date.now() + 30 * 60e3 },
+        });
+      } catch (e) { console.error('תזכורת:', e.message); }
     }
     console.log(`⏰ תזכורת נשלחה: ${t.title}`);
   }

@@ -63,6 +63,8 @@ Allowed actions:
 {"type":"delete","ref": <number|title>}
 {"type":"update","ref": <number|title>, "title":"...|null", "due":"ISO-8601|null", "all_day":true|false, "shared":true|false}
 {"type":"assign","ref": <number|title>, "to":"me"|"partner"|null}
+{"type":"note","ref": <number|title>, "text":"the note itself, in Hebrew"}
+{"type":"show_notes","ref": <number|title>}
 {"type":"list","filter":"digest"|"today"|"tomorrow"|"week"|"overdue"|"all"|"shared"|"done"|"mine_assigned"|"partner_assigned"}
 {"type":"none"}
 
@@ -86,11 +88,16 @@ RULES
    - Setting "assign" ALWAYS forces "shared": true. Assignment exists only inside the shared zone.
    - "אני אקח את זה" / "אני אטפל" on an existing task → {"type":"assign","ref":N,"to":"me"}.
    - "תעביר את זה ל${ctx.partnerName || 'בן הזוג'}" → {"type":"assign","ref":N,"to":"partner"}.
-7. If the user reports finishing something ("סיימתי עם הארנונה", "שילמתי"), emit "complete" and match it to the closest task by meaning — use its number.
-8. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
-9. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
-10. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.
-11. Never output explanations, markdown, or text outside the JSON object.`;
+7. NOTES — extra information ABOUT an existing task, not a new task.
+   - "כבר קניתי חלב, צריך רק לחם" while a milk task exists → {"type":"note","ref":N,"text":"כבר קניתי חלב, צריך רק לחם"}
+   - "תוסיף הערה ל-3 ש..." / "רשום על הפגישה ש..." → note
+   - "מה ההערות על 3" / "מה כתוב על הפגישה" → show_notes
+   - Careful: if it describes something NEW to do, it is an "add", not a note.
+8. If the user reports finishing something ("סיימתי עם הארנונה", "שילמתי"), emit "complete" and match it to the closest task by meaning — use its number.
+9. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
+10. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
+11. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.
+12. Never output explanations, markdown, or text outside the JSON object.`;
 }
 
 // ── פענוח הודעה ─────────────────────────────────────────────────────

@@ -53,18 +53,13 @@ export async function handleMessage(user, rawText, deps, opts = {}) {
 async function route(user, text, deps) {
   const cmd = parseCommand(text);
 
-  // ── 1. שאלת אישור ממתינה ──
+  // ── 1. שאלה פתוחה ממתינה ──
+  // עיקרון אחיד: כל שאלה שהבוט שואל נענית במספר (או כן/לא).
   const st = await db.getState(user.id);
   const pending = validPending(st.pending);
   if (pending) {
-    if (cmd?.kind === 'yes') {
-      await db.clearPending(user.id);
-      return resolvePending(user, pending, deps);
-    }
-    if (cmd?.kind === 'no') {
-      await db.clearPending(user.id);
-      return 'בסדר, לא הוספתי.';
-    }
+    const handled = await handlePending(user, pending, text, cmd, deps);
+    if (handled !== null) return handled;
     await db.clearPending(user.id);   // המשתמש עבר לנושא אחר
   } else if (st.pending) {
     await db.clearPending(user.id);
@@ -125,7 +120,8 @@ async function handleCommand(user, cmd, deps) {
     case 'list': {
       const tasks = await db.openTasksFor(user);
       const doneTasks = cmd.filter === 'done' ? await db.recentlyDone(user) : null;
-      const o = { ...viewOpts(user, deps), doneTasks };
+      const noteCounts = await db.noteCounts(tasks.map((t) => t.id));
+      const o = { ...viewOpts(user, deps), doneTasks, noteCounts };
       const view = cmd.filter === 'digest'
         ? R.renderDigest(user, tasks, o)
         : R.renderList(user, tasks, cmd.filter, o);
@@ -170,6 +166,18 @@ async function handleCommand(user, cmd, deps) {
         return `👥 ${changed.length === 1 ? `"${changed[0].title}" עברה` : `${changed.length} משימות עברו`} לרשימה המשותפת${partner ? ` עם ${partner.name}` : ''}.`;
       }
       return `🔒 ${changed.length === 1 ? `"${changed[0].title}" חזרה` : `${changed.length} משימות חזרו`} להיות פרטיות.`;
+    }
+
+    case 'note_add': {
+      const { ids } = await T.resolveRefs(user, [cmd.ref]);
+      if (!ids.length) return 'לא מצאתי את המשימה. שלח "רשימה" לרענון המספרים.';
+      return addNoteTo(user, ids[0], cmd.text, deps);
+    }
+
+    case 'note_show': {
+      const { ids } = await T.resolveRefs(user, [cmd.ref]);
+      if (!ids.length) return 'לא מצאתי את המשימה. שלח "רשימה" לרענון המספרים.';
+      return applyVerb(user, 'note_show', {}, ids, deps);
     }
 
     case 'digest_time': {
@@ -230,13 +238,21 @@ async function execActions(user, parsed, sourceText, deps) {
           break;
         }
         case 'complete': {
-          const { ids } = await T.resolveRefs(user, [a.ref]);
-          const { done, repeated, already } = await T.completeTasks(user, ids);
-          await notifyShared(user, done, 'done', deps);
-          await notifyAssigner(user, done, deps);
-          if (done.length || already.length) {
-            outputs.push(R.renderDone(done, repeated, { already, ...viewOpts(user, deps) }));
-          }
+          const r = await resolveOrAsk(user, a.ref, 'complete', {}, deps);
+          if (r.ask) { outputs.push(r.ask); break; }
+          if (r.ids.length) outputs.push(await applyVerb(user, 'complete', {}, r.ids, deps));
+          break;
+        }
+        case 'note': {
+          const r = await resolveOrAsk(user, a.ref, 'note', { text: a.text }, deps);
+          if (r.ask) { outputs.push(r.ask); break; }
+          if (r.ids.length) outputs.push(await addNoteTo(user, r.ids[0], a.text, deps));
+          break;
+        }
+        case 'show_notes': {
+          const r = await resolveOrAsk(user, a.ref, 'note_show', {}, deps);
+          if (r.ask) { outputs.push(r.ask); break; }
+          if (r.ids.length) outputs.push(await applyVerb(user, 'note_show', {}, r.ids, deps));
           break;
         }
         case 'snooze':
@@ -258,16 +274,15 @@ async function execActions(user, parsed, sourceText, deps) {
           break;
         }
         case 'delete': {
-          const { ids } = await T.resolveRefs(user, [a.ref]);
-          const removed = await T.deleteTasks(user, ids);
-          await notifyShared(user, removed, 'delete', deps);
-          outputs.push(R.renderDeleted(removed));
+          const r = await resolveOrAsk(user, a.ref, 'delete', {}, deps);
+          if (r.ask) { outputs.push(r.ask); break; }
+          if (r.ids.length) outputs.push(await applyVerb(user, 'delete', {}, r.ids, deps));
           break;
         }
         case 'list': {
           const tasks = await db.openTasksFor(user);
           const doneTasks = a.filter === 'done' ? await db.recentlyDone(user) : null;
-          const o = { ...viewOpts(user, deps), doneTasks };
+          const o = { ...viewOpts(user, deps), doneTasks, noteCounts: await db.noteCounts(tasks.map((t) => t.id)) };
           const view = a.filter === 'digest' || !a.filter
             ? R.renderDigest(user, tasks, o)
             : R.renderList(user, tasks, a.filter, o);
@@ -311,6 +326,115 @@ async function addOne(user, spec, deps) {
   if (res.task?.shared) await notifyShared(user, [res.task], 'add', deps);
   if (res.task?.assigned_to) await notifyAssignment(user, [res.task], deps);
   return res;
+}
+
+/**
+ * מטפל בשאלה פתוחה. מחזיר טקסט תשובה, או null אם ההודעה לא קשורה
+ * לשאלה (ואז השאלה נזנחת וההודעה ממשיכה במסלול הרגיל).
+ */
+async function handlePending(user, pending, text, cmd, deps) {
+  const pick = /^\d+$/.test(text.trim()) ? parseInt(text.trim(), 10) : null;
+
+  switch (pending.kind) {
+    case 'confirm_add':
+      if (cmd?.kind === 'yes') { await db.clearPending(user.id); return resolvePending(user, pending, deps); }
+      if (cmd?.kind === 'no') { await db.clearPending(user.id); return 'בסדר, לא הוספתי.'; }
+      return null;
+
+    case 'disambiguate': {
+      if (cmd?.kind === 'no') { await db.clearPending(user.id); return 'בסדר, ויתרתי.'; }
+      if (!pick || pick < 1 || pick > (pending.ids || []).length) return null;
+      await db.clearPending(user.id);
+      return applyVerb(user, pending.verb, pending.payload || {}, [pending.ids[pick - 1]], deps);
+    }
+
+    case 'reminder_actions': {
+      if (!pick || pick < 1 || pick > 3) return null;
+      await db.clearPending(user.id);
+      if (pick === 1) return applyVerb(user, 'complete', {}, [pending.task_id], deps);
+      const due = pick === 2 ? new Date(Date.now() + 60 * 60e3) : T.tomorrowMorning();
+      return applyVerb(user, 'snooze', { due: due.toISOString(), all_day: pick === 3 }, [pending.task_id], deps);
+    }
+
+    default:
+      return null;
+  }
+}
+
+/**
+ * מבצע פעולה על משימות שכבר זוהו. משותף למסלול ה-AI ולמסלול
+ * שאלות ההבהרה, כדי ששניהם יתנהגו בדיוק אותו דבר.
+ */
+async function applyVerb(user, verb, payload, ids, deps) {
+  if (!ids.length) return 'לא מצאתי את המשימה.';
+  switch (verb) {
+    case 'complete': {
+      const { done, repeated, already } = await T.completeTasks(user, ids);
+      await notifyShared(user, done, 'done', deps);
+      await notifyAssigner(user, done, deps);
+      return R.renderDone(done, repeated, { already, ...viewOpts(user, deps) });
+    }
+    case 'snooze': {
+      const due = payload.due ? new Date(payload.due) : T.tomorrowMorning();
+      const moved = await T.snoozeTasks(user, ids, due, payload.all_day !== false);
+      await notifyShared(user, moved.map((m) => m.task), 'snooze', deps);
+      return R.renderSnoozed(moved);
+    }
+    case 'delete': {
+      const removed = await T.deleteTasks(user, ids);
+      await notifyShared(user, removed, 'delete', deps);
+      return R.renderDeleted(removed);
+    }
+    case 'assign': {
+      const changed = await T.setAssignee(user, ids, assigneeId(user, deps, payload.to));
+      await notifyAssignment(user, changed.map((c) => c.task), deps);
+      return R.renderAssigned(changed, viewOpts(user, deps));
+    }
+    case 'note':
+      return addNoteTo(user, ids[0], payload.text, deps);
+    case 'note_show': {
+      const task = await db.getTask(ids[0]);
+      if (!task) return 'לא מצאתי את המשימה.';
+      return R.renderNotes(task, await db.getNotes(task.id), viewOpts(user, deps));
+    }
+    default:
+      return 'לא הבנתי מה לעשות.';
+  }
+}
+
+// הוספת הערה + דחיפה מיידית לצד השני אם המשימה משותפת
+async function addNoteTo(user, taskId, body, deps) {
+  const task = await db.getTask(taskId);
+  if (!task) return 'לא מצאתי את המשימה.';
+  if (!body || !body.trim()) return 'מה לרשום כהערה?';
+  await db.addNote(task.id, user.id, body.trim());
+  const notes = await db.getNotes(task.id);
+
+  if (task.shared) {
+    const other = deps.partnerOf(user);
+    if (other) await deps.notify(other, R.renderNoteFromPartner(user.name, task, body.trim()));
+  }
+  return R.renderNoteAdded(task, { count: notes.length });
+}
+
+/**
+ * מזהה משימה לפי הפניה. אם יש כמה מועמדות קרובות — שואל במקום לנחש.
+ * מחזיר { ids } או { ask } (טקסט השאלה, אחרי ששמר את ההקשר).
+ */
+async function resolveOrAsk(user, ref, verb, payload, deps) {
+  const { ids, missing, ambiguous } = await T.resolveRefs(user, [ref]);
+  if (ambiguous?.length) {
+    const a = ambiguous[0];
+    await db.setState(user.id, {
+      pending: {
+        kind: 'disambiguate', verb, payload,
+        query: a.query, ids: a.candidates.map((t) => t.id),
+        expires_at: Date.now() + PENDING_TTL_MS,
+      },
+    });
+    return { ask: R.renderDisambiguation(a.query, a.candidates) };
+  }
+  return { ids, missing };
 }
 
 async function resolvePending(user, pending, deps) {

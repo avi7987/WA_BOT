@@ -253,6 +253,14 @@ export function parseCommand(raw) {
   m = /^(?:בטל שיתוף|הפרד)\s+([\d,\s]+)$/.exec(t);
   if (m) { const ns = numbers(m[1]); if (ns.length) return { kind: 'share', refs: ns, shared: false }; }
 
+  // הערה על משימה: "הערה 3: כבר קניתי חלב"  /  "הערה 3 כבר קניתי"
+  m = /^(?:הערה|תערה|הוסף הערה|רשום ל)\s*(\d+)\s*[:,\-–]?\s*(.+)$/.exec(t);
+  if (m) return { kind: 'note_add', ref: +m[1], text: m[2].trim() };
+
+  // צפייה בהערות: "הערות 3" / "מה ההערות על 3" / "תראה הערות 3"
+  m = /^(?:הערות|מה ההערות(?: על)?|תראה(?: לי)? (?:את ה)?הערות(?: של| על)?|הצג הערות)\s*(\d+)$/.exec(t);
+  if (m) return { kind: 'note_show', ref: +m[1] };
+
   // שינוי שעת סיכום הבוקר
   m = /^(?:סיכום בוקר|שעת בוקר|תעיר אותי)\s+(?:ב-?\s*)?([01]?\d|2[0-3])[:.]([0-5]\d)$/.exec(t);
   if (m) return { kind: 'digest_time', time: `${String(+m[1]).padStart(2, '0')}:${m[2]}` };

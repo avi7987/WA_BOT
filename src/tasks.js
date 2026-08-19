@@ -6,6 +6,8 @@ import * as db from './db.js';
 import { similarity, addDays, addMonths, daysFromToday, ilParts, makeIL, fmtTime } from './util.js';
 
 const SIMILAR_THRESHOLD = 0.72;
+// אם שתי המשימות הכי דומות קרובות זו לזו יותר מהפער הזה — לא מנחשים, שואלים
+const AMBIGUITY_GAP = 0.12;
 
 // ── הוספה ───────────────────────────────────────────────────────────
 /**
@@ -238,17 +240,32 @@ export async function undoLast(user) {
 export async function resolveRefs(user, refs) {
   const ids = [];
   const missing = [];
+  const ambiguous = [];
   const open = await db.openTasksFor(user);
   for (const r of refs) {
     if (typeof r === 'number' || /^\d+$/.test(String(r))) {
       const id = await db.resolveRef(user.id, parseInt(r, 10));
       if (id) ids.push(id); else missing.push(r);
     } else {
-      const match = findSimilar(open, String(r));
-      if (match) ids.push(match.id); else missing.push(r);
+      const cands = findCandidates(open, String(r));
+      if (!cands.length) { missing.push(r); continue; }
+      // שתי משימות קרובות באותה מידה — עדיף לשאול מאשר לנחש
+      if (cands.length > 1 && cands[1].score >= SIMILAR_THRESHOLD && cands[0].score - cands[1].score < AMBIGUITY_GAP) {
+        ambiguous.push({ query: String(r), candidates: cands.filter((c) => c.score >= SIMILAR_THRESHOLD).slice(0, 4).map((c) => c.task) });
+        continue;
+      }
+      ids.push(cands[0].task.id);
     }
   }
-  return { ids: [...new Set(ids)], missing };
+  return { ids: [...new Set(ids)], missing, ambiguous };
+}
+
+// כל ההתאמות מעל הסף, מהטובה לפחות טובה
+export function findCandidates(tasks, title) {
+  return tasks
+    .map((t) => ({ task: t, score: similarity(t.title, title) }))
+    .filter((c) => c.score >= SIMILAR_THRESHOLD)
+    .sort((a, b) => b.score - a.score);
 }
 
 // ── פילוח לרשימות ───────────────────────────────────────────────────

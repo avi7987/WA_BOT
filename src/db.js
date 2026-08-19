@@ -93,6 +93,29 @@ export async function recentlyDone(user, days = 7) {
   return data || [];
 }
 
+// ── הערות על משימות ─────────────────────────────────────────────────
+export async function addNote(taskId, authorId, body) {
+  const { data, error } = await supabase.from('pa_notes')
+    .insert({ task_id: taskId, author_id: authorId, body }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function getNotes(taskId) {
+  const { data } = await supabase.from('pa_notes')
+    .select('*').eq('task_id', taskId).order('created_at');
+  return data || [];
+}
+
+// כמה הערות יש לכל משימה ברשימה — שאילתה אחת במקום אחת לכל משימה
+export async function noteCounts(taskIds) {
+  const counts = new Map();
+  if (!taskIds.length) return counts;
+  const { data } = await supabase.from('pa_notes').select('task_id').in('task_id', taskIds);
+  for (const r of (data || [])) counts.set(r.task_id, (counts.get(r.task_id) || 0) + 1);
+  return counts;
+}
+
 // ── מספרי קיצור (הרשימה שהוצגה לאחרונה) ─────────────────────────────
 export async function setRefs(userId, taskIds) {
   await supabase.from('pa_refs').delete().eq('user_id', userId);

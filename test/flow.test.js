@@ -203,3 +203,95 @@ test('ביטול מחזיר שיוך קודם', async () => {
   const after = await db.getTask(res.task.id);
   assert.equal(after.assigned_to, null);
 });
+
+// ── הערות, הבהרה ותזכורות (גרסה 2.1) ───────────────────────────────
+test('הערה נשמרת, מסומנת ברשימה, ונדחפת לצד השני כשהמשימה משותפת', async () => {
+  sent.length = 0;
+  const due = new Date(Date.now() + 864e5).toISOString();
+  // force — "לקנות חלב" כבר קיימת מבדיקת הכפילויות, וזיהוי הכפילות היה חוסם
+  const res = await T.addTask(owner, { title: 'לקנות חלב ולחם', shared: true, due_at: due, source_text: 't' }, { force: true });
+  assert.ok(res.task);
+
+  const numOf = async (re) => {
+    await handleMessage(owner, 'רשימה', deps);
+    const refs = await db.getRefs(owner.id);
+    const tasks = await Promise.all(refs.map((r) => db.getTask(r.task_id)));
+    const i = tasks.findIndex((t) => re.test(t.title));
+    assert.ok(i >= 0, 'המשימה מופיעה ברשימה');
+    return refs[i].n;
+  };
+
+  const reply = await handleMessage(owner, `הערה ${await numOf(/חלב ולחם/)}: כבר קניתי חלב, צריך רק לחם`, deps);
+  assert.match(reply, /💬/);
+
+  // נדחפה מיד לאיה, ולא נשארה מחכה שתשים לב לסימון
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, 'partner');
+  assert.match(sent[0].text, /כבר קניתי חלב/);
+
+  // מופיעה כסימון ברשימה
+  const list = await handleMessage(owner, 'רשימה', deps);
+  assert.match(list, /💬/);
+
+  // ואפשר לשלוף אותה
+  const notes = await handleMessage(owner, `הערות ${await numOf(/חלב ולחם/)}`, deps);
+  assert.match(notes, /כבר קניתי חלב/);
+});
+
+test('שתי משימות דומות → שאלת הבהרה, ותשובה במספר בוחרת', async () => {
+  const a = await T.addTask(owner, { title: 'פגישה עם רואה חשבון בבנק', source_text: 't' });
+  const b = await T.addTask(owner, { title: 'פגישה עם רואה חשבון במשרד', source_text: 't' }, { force: true });
+  assert.ok(a.task && b.task);
+
+  const r = await T.resolveRefs(owner, ['פגישה עם רואה חשבון']);
+  assert.equal(r.ids.length, 0, 'לא ניחש');
+  assert.ok(r.ambiguous.length, 'זוהתה עמימות');
+  assert.ok(r.ambiguous[0].candidates.length >= 2);
+
+  const q = R.renderDisambiguation(r.ambiguous[0].query, r.ambiguous[0].candidates);
+  assert.match(q, /על איזו התכוונת/);
+  assert.match(q, /1 ·/);
+
+  // מסלול מלא: השאלה נשמרת, והתשובה במספר מבצעת את הפעולה על הנבחרת
+  await db.setState(owner.id, {
+    pending: { kind: 'disambiguate', verb: 'complete', payload: {},
+               query: 'פגישה', ids: r.ambiguous[0].candidates.map((t) => t.id),
+               expires_at: Date.now() + 60e3 },
+  });
+  const picked = await handleMessage(owner, '2', deps);
+  assert.match(picked, /✔️/);
+  const after = await db.getTask(r.ambiguous[0].candidates[1].id);
+  assert.equal(after.status, 'done');
+});
+
+test('תזכורת מציגה אפשרויות ממוספרות', () => {
+  const t = { title: 'פגישה עם רו״ח', due_at: new Date(Date.now() + 15 * 60e3).toISOString(), all_day: false };
+  const txt = R.renderReminder(t, { leadMinutes: 15 });
+  assert.match(txt, /⏰/);
+  assert.match(txt, /1 = בוצע/);
+  assert.match(txt, /2 = דחה בשעה/);
+  assert.match(txt, /3 = דחה למחר/);
+});
+
+test('תשובה 1 על תזכורת מסמנת את אותה משימה כבוצעה', async () => {
+  const res = await T.addTask(owner, { title: 'להתקשר לביטוח', source_text: 't' });
+  await db.setState(owner.id, {
+    pending: { kind: 'reminder_actions', task_id: res.task.id, expires_at: Date.now() + 60e3 },
+  });
+  const reply = await handleMessage(owner, '1', deps);
+  assert.match(reply, /✔️/);
+  const after = await db.getTask(res.task.id);
+  assert.equal(after.status, 'done');
+});
+
+test('תשובה 3 על תזכורת דוחה למחר', async () => {
+  const res = await T.addTask(owner, { title: 'לשלוח מסמכים', source_text: 't' });
+  await db.setState(owner.id, {
+    pending: { kind: 'reminder_actions', task_id: res.task.id, expires_at: Date.now() + 60e3 },
+  });
+  const reply = await handleMessage(owner, '3', deps);
+  assert.match(reply, /🕗/);
+  const after = await db.getTask(res.task.id);
+  assert.equal(after.status, 'open');
+  assert.ok(new Date(after.due_at).getTime() > Date.now());
+});
