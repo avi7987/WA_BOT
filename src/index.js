@@ -177,7 +177,9 @@ function startWatchdog(graceMs = 12 * 60_000) {
   const since = new Map();
   setInterval(() => {
     for (const [key, s] of sessions) {
-      if (s.state === 'ready') { since.delete(key); continue; }
+      // 'qr' = ממתין שאדם יסרוק. זו לא תקיעה, וזה יכול להימשך שעות —
+      // אסור שהשומר יפיל את השירות באמצע ויבטל את הקוד שהוצג.
+      if (s.state === 'ready' || s.state === 'qr') { since.delete(key); continue; }
       if (!since.has(key)) since.set(key, Date.now());
       const stuckFor = Date.now() - since.get(key);
       if (stuckFor > graceMs) {
