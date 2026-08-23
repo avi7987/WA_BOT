@@ -11,7 +11,9 @@ import * as db from './db.js';
 import * as T from './tasks.js';
 import * as R from './render.js';
 import * as llm from './llm.js';
+import * as OB from './outbound.js';
 import { parseCommand, parseTaskFallback, extractDue, mentionsTime } from './parse.js';
+import { rtl as rtlLine } from './util.js';
 
 const PENDING_TTL_MS = 15 * 60e3;
 
@@ -120,8 +122,8 @@ async function handleCommand(user, cmd, deps) {
     case 'list': {
       const tasks = await db.openTasksFor(user);
       const doneTasks = cmd.filter === 'done' ? await db.recentlyDone(user) : null;
-      const noteCounts = await db.noteCounts(tasks.map((t) => t.id));
-      const o = { ...viewOpts(user, deps), doneTasks, noteCounts };
+      const ids = tasks.map((t) => t.id);
+      const o = { ...viewOpts(user, deps), doneTasks, noteCounts: await db.noteCounts(ids), messageCounts: await db.messageCounts(ids) };
       const view = cmd.filter === 'digest'
         ? R.renderDigest(user, tasks, o)
         : R.renderList(user, tasks, cmd.filter, o);
@@ -180,6 +182,53 @@ async function handleCommand(user, cmd, deps) {
       return applyVerb(user, 'note_show', {}, ids, deps);
     }
 
+    // ── הודעות יוצאות ──
+    case 'msg_list': {
+      const rows = await db.messagesAwaiting(user.id);
+      const all = await db.openTasksFor(user);
+      const live = [];
+      for (const t of all) live.push(...await db.messagesForTask(t.id));
+      const byId = new Map(all.map((t) => [t.id, t]));
+      return R.renderMessageList(live.length ? live : rows, byId);
+    }
+
+    case 'msg_sent_today':
+      return R.renderSentToday(await db.sentToday());
+
+    case 'msg_show': {
+      const r = await messageOfTaskRef(user, cmd.ref);
+      if (r.error) return r.error;
+      return R.renderMessageDraft(r.msg, await db.getTask(r.taskId));
+    }
+
+    case 'msg_cancel': {
+      const r = await messageOfTaskRef(user, cmd.ref);
+      if (r.error) return r.error;
+      await OB.cancel(user, r.msg.id);
+      return `🗑️ ההודעה ל${r.msg.to_name || r.msg.to_phone} בוטלה. המשימה נשארה.`;
+    }
+
+    case 'msg_edit': {
+      const r = await messageOfTaskRef(user, cmd.ref);
+      if (r.error) return r.error;
+      const updated = await OB.edit(user, r.msg.id, cmd.text);
+      return R.renderMessageDraft(updated, await db.getTask(r.taskId));
+    }
+
+    case 'msg_send': {
+      const r = await messageOfTaskRef(user, cmd.ref);
+      if (r.error) return r.error;
+      await OB.askApproval(user, r.msg, { ...deps, sendTo: async () => {} });
+      return R.renderApprovalRequest(r.msg, await db.getTask(r.taskId));
+    }
+
+    // שליחת מבחן — ההודעה נשלחת אליך, בדיוק כפי שתיראה אצל הנמען
+    case 'msg_test': {
+      const r = await messageOfTaskRef(user, cmd.ref);
+      if (r.error) return r.error;
+      return `🧪 ככה זה ייראה אצל ${r.msg.to_name || r.msg.to_phone}:\n\n${r.msg.body}`;
+    }
+
     case 'digest_time': {
       await db.upsertUser(user.session_key, { digest_time: cmd.time });
       user.digest_time = cmd.time;
@@ -227,6 +276,18 @@ async function execActions(user, parsed, sourceText, deps) {
           addResults.push(res);
           if (res.task?.shared) await notifyShared(user, [res.task], 'add', deps);
           if (res.task?.assigned_to) await notifyAssignment(user, [res.task], deps);
+          break;
+        }
+        case 'compose_message': {
+          const taskId = a.ref === 'new' || a.ref == null
+            ? (addResults[addResults.length - 1]?.task?.id || null)
+            : (await T.resolveRefs(user, [a.ref])).ids[0];
+          if (!taskId) { outputs.push('לא הבנתי לאיזו משימה לקשר את ההודעה.'); break; }
+          const t2 = await db.getTask(taskId);
+          outputs.push(await createMessageFor(user, {
+            taskId, phone: a.to_phone || null, contactQuery: a.to_name || null,
+            body: a.body, sendAt: a.send_at || t2?.due_at || null,
+          }, deps));
           break;
         }
         case 'assign': {
@@ -282,7 +343,7 @@ async function execActions(user, parsed, sourceText, deps) {
         case 'list': {
           const tasks = await db.openTasksFor(user);
           const doneTasks = a.filter === 'done' ? await db.recentlyDone(user) : null;
-          const o = { ...viewOpts(user, deps), doneTasks, noteCounts: await db.noteCounts(tasks.map((t) => t.id)) };
+          const o = { ...viewOpts(user, deps), doneTasks, noteCounts: await db.noteCounts(tasks.map((t) => t.id)), messageCounts: await db.messageCounts(tasks.map((t) => t.id)) };
           const view = a.filter === 'digest' || !a.filter
             ? R.renderDigest(user, tasks, o)
             : R.renderList(user, tasks, a.filter, o);
@@ -348,6 +409,51 @@ async function handlePending(user, pending, text, cmd, deps) {
       return applyVerb(user, pending.verb, pending.payload || {}, [pending.ids[pick - 1]], deps);
     }
 
+    // ── אישור הודעה יוצאת ──
+    // 1=שלח 2=ערוך 3=בטל 4=דחה. כל תשובה אחרת אינה אישור.
+    case 'approve_message': {
+      if (cmd?.kind === 'no') { await db.clearPending(user.id); await OB.cancel(user, pending.message_id); return '🗑️ ההודעה בוטלה ולא נשלחה.'; }
+      if (!pick || pick < 1 || pick > 4) return null;
+      const msg = await db.getMessage(pending.message_id);
+      if (!msg) { await db.clearPending(user.id); return 'לא מצאתי את ההודעה.'; }
+
+      if (pick === 1) { await db.clearPending(user.id); return OB.approveAndSend(user, msg.id, deps); }
+      if (pick === 3) { await db.clearPending(user.id); await OB.cancel(user, msg.id); return '🗑️ ההודעה בוטלה ולא נשלחה.'; }
+      if (pick === 4) {
+        await db.clearPending(user.id);
+        await db.updateMessage(msg.id, { status: 'scheduled', send_at: new Date(Date.now() + 3600e3).toISOString(), asked_at: null });
+        return '🕗 אחזור אליך עם ההודעה בעוד שעה.';
+      }
+      // 2 = עריכה: ממתינים לנוסח החדש
+      await db.setState(user.id, {
+        pending: { kind: 'edit_message', message_id: msg.id, expires_at: Date.now() + PENDING_TTL_MS },
+      });
+      return rtlLine(`✏️ מה לכתוב במקום?\n\nהנוסח הנוכחי:\n"${msg.body}"`);
+    }
+
+    case 'edit_message': {
+      if (cmd?.kind === 'no') { await db.clearPending(user.id); return 'בסדר, השארתי את הנוסח הקודם.'; }
+      if (!text.trim()) return null;
+      await db.clearPending(user.id);
+      const updated = await OB.edit(user, pending.message_id, text.trim());
+      const task = updated ? await db.getTask(updated.task_id) : null;
+      await db.setState(user.id, {
+        pending: { kind: 'approve_message', message_id: pending.message_id, expires_at: Date.now() + 6 * 3600e3 },
+      });
+      await db.updateMessage(pending.message_id, { status: 'awaiting_approval', asked_at: new Date().toISOString() });
+      return R.renderApprovalRequest({ ...updated, body: text.trim() }, task);
+    }
+
+    // ── בחירת נמען מרשימת אנשי הקשר ──
+    case 'contact_choice': {
+      if (cmd?.kind === 'no') { await db.clearPending(user.id); return 'בסדר, ויתרתי.'; }
+      const list = pending.contacts || [];
+      if (!pick || pick < 1 || pick > list.length) return null;
+      await db.clearPending(user.id);
+      const c = list[pick - 1];
+      return createMessageFor(user, { ...pending.draft, phone: c.phone, name: c.name }, deps);
+    }
+
     case 'reminder_actions': {
       if (!pick || pick < 1 || pick > 3) return null;
       await db.clearPending(user.id);
@@ -400,6 +506,50 @@ async function applyVerb(user, verb, payload, ids, deps) {
     default:
       return 'לא הבנתי מה לעשות.';
   }
+}
+
+// ── הודעות יוצאות: יצירה, כולל זיהוי נמען ───────────────────────────
+/**
+ * draft = { taskId, phone?, contactQuery?, name?, body, sendAt? }
+ * אם נמסר שם ולא מספר — מחפש באנשי הקשר, ושואל אם יש כמה התאמות.
+ */
+async function createMessageFor(user, draft, deps) {
+  let { phone, name } = draft;
+
+  if (!phone && draft.contactQuery) {
+    const matches = deps.findContacts ? await deps.findContacts(user, draft.contactQuery) : [];
+    if (!matches.length) {
+      return `לא מצאתי איש קשר בשם "${draft.contactQuery}". אפשר להכתיב לי את המספר ישירות.`;
+    }
+    if (matches.length > 1 && matches[1].score >= matches[0].score - 0.15) {
+      await db.setState(user.id, {
+        pending: { kind: 'contact_choice', contacts: matches, draft, expires_at: Date.now() + PENDING_TTL_MS },
+      });
+      return R.renderContactChoice(draft.contactQuery, matches);
+    }
+    phone = matches[0].phone;
+    name = matches[0].name;
+  }
+
+  if (!phone) return 'למי לשלוח? אפשר שם מאנשי הקשר או מספר טלפון.';
+
+  try {
+    const msg = await OB.compose(user, {
+      taskId: draft.taskId, phone, name, body: draft.body, sendAt: draft.sendAt || null,
+    });
+    return R.renderMessageAttached(msg);
+  } catch (e) {
+    return `לא הצלחתי להכין את ההודעה: ${e.message}`;
+  }
+}
+
+// מאתר הודעה לפי מספר המשימה שהוצג ברשימה
+async function messageOfTaskRef(user, ref) {
+  const { ids } = await T.resolveRefs(user, [ref]);
+  if (!ids.length) return { error: 'לא מצאתי את המשימה. שלח "רשימה" לרענון המספרים.' };
+  const msgs = await db.messagesForTask(ids[0]);
+  if (!msgs.length) return { error: 'אין הודעה מקושרת למשימה הזו.' };
+  return { msg: msgs[0], taskId: ids[0] };
 }
 
 // הוספת הערה + דחיפה מיידית לצד השני אם המשימה משותפת

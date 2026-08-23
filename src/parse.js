@@ -261,6 +261,25 @@ export function parseCommand(raw) {
   m = /^(?:הערות|מה ההערות(?: על)?|תראה(?: לי)? (?:את ה)?הערות(?: של| על)?|הצג הערות)\s*(\d+)$/.exec(t);
   if (m) return { kind: 'note_show', ref: +m[1] };
 
+  // ── הודעות יוצאות ──
+  if (/^(הודעות|הודעות ממתינות|מה ממתין לשליחה)$/.test(t)) return { kind: 'msg_list' };
+  if (/^(נשלחו היום|מה שלחתי היום|יומן שליחות)$/.test(t)) return { kind: 'msg_sent_today' };
+
+  m = /^(?:הודעה|תראה הודעה|הצג הודעה)\s+(\d+)$/.exec(t);
+  if (m) return { kind: 'msg_show', ref: +m[1] };
+
+  m = /^(?:בטל הודעה|תבטל(?: את ה)?הודעה|מחק הודעה)\s+(\d+)$/.exec(t);
+  if (m) return { kind: 'msg_cancel', ref: +m[1] };
+
+  m = /^(?:שנה הודעה|ערוך הודעה|תשנה(?: את ה)?הודעה)\s+(\d+)\s*[:,\-–]?\s*(.+)$/.exec(t);
+  if (m) return { kind: 'msg_edit', ref: +m[1], text: m[2].trim() };
+
+  m = /^(?:שלח הודעה|תשלח(?: את ה)?הודעה)\s+(\d+)$/.exec(t);
+  if (m) return { kind: 'msg_send', ref: +m[1] };
+
+  m = /^(?:בדוק הודעה|תבדוק הודעה)\s+(\d+)$/.exec(t);
+  if (m) return { kind: 'msg_test', ref: +m[1] };
+
   // שינוי שעת סיכום הבוקר
   m = /^(?:סיכום בוקר|שעת בוקר|תעיר אותי)\s+(?:ב-?\s*)?([01]?\d|2[0-3])[:.]([0-5]\d)$/.exec(t);
   if (m) return { kind: 'digest_time', time: `${String(+m[1]).padStart(2, '0')}:${m[2]}` };

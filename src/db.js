@@ -116,6 +116,77 @@ export async function noteCounts(taskIds) {
   return counts;
 }
 
+// ── הודעות יוצאות ───────────────────────────────────────────────────
+export async function createMessage(msg) {
+  const { data, error } = await supabase.from('pa_messages').insert(msg).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateMessage(id, fields) {
+  const clean = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined));
+  const { data } = await supabase.from('pa_messages').update(clean).eq('id', id).select().maybeSingle();
+  return data || null;
+}
+
+export async function getMessage(id) {
+  const { data } = await supabase.from('pa_messages').select('*').eq('id', id).maybeSingle();
+  return data || null;
+}
+
+// ההודעות הפעילות של משימה (טיוטה/מתוזמנת/ממתינה) — לא היסטוריה
+const LIVE = ['draft', 'scheduled', 'awaiting_approval'];
+
+export async function messagesForTask(taskId) {
+  const { data } = await supabase.from('pa_messages')
+    .select('*').eq('task_id', taskId).in('status', LIVE).order('created_at');
+  return data || [];
+}
+
+// כמה הודעות פעילות יש לכל משימה ברשימה — לסימון 📤
+export async function messageCounts(taskIds) {
+  const counts = new Map();
+  if (!taskIds.length) return counts;
+  const { data } = await supabase.from('pa_messages')
+    .select('task_id').in('task_id', taskIds).in('status', LIVE);
+  for (const r of (data || [])) counts.set(r.task_id, (counts.get(r.task_id) || 0) + 1);
+  return counts;
+}
+
+export async function liveMessages() {
+  const { data } = await supabase.from('pa_messages').select('*').in('status', LIVE).limit(200);
+  return data || [];
+}
+
+export async function messagesAwaiting(userId) {
+  const { data } = await supabase.from('pa_messages')
+    .select('*').eq('status', 'awaiting_approval').eq('created_by', userId).order('asked_at');
+  return data || [];
+}
+
+// ── יומן שליחות ומעקות ──────────────────────────────────────────────
+export async function logSent(row) {
+  await supabase.from('pa_sent_log').insert(row);
+}
+
+export async function sentTodayCount() {
+  return (await sentToday()).length;
+}
+
+// האם נשלחה הודעה לאותו מספר בדקות האחרונות (הגנה מכפילות)
+export async function sentRecentlyTo(phone, minutes) {
+  const since = new Date(Date.now() - minutes * 60e3).toISOString();
+  const { data } = await supabase.from('pa_sent_log')
+    .select('sent_at').eq('to_phone', phone).gte('sent_at', since).limit(1);
+  return (data || []).length > 0;
+}
+
+export async function sentToday() {
+  const { data } = await supabase.from('pa_sent_log')
+    .select('*').eq('day', ilDateStr()).order('sent_at');
+  return data || [];
+}
+
 // ── מספרי קיצור (הרשימה שהוצגה לאחרונה) ─────────────────────────────
 export async function setRefs(userId, taskIds) {
   await supabase.from('pa_refs').delete().eq('user_id', userId);

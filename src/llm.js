@@ -65,6 +65,7 @@ Allowed actions:
 {"type":"assign","ref": <number|title>, "to":"me"|"partner"|null}
 {"type":"note","ref": <number|title>, "text":"the note itself, in Hebrew"}
 {"type":"show_notes","ref": <number|title>}
+{"type":"compose_message","ref": <number|title|"new">, "to_name":"contact name as the user said it", "to_phone":"digits or null", "body":"the exact message text", "send_at":"ISO-8601 or null"}
 {"type":"list","filter":"digest"|"today"|"tomorrow"|"week"|"overdue"|"all"|"shared"|"done"|"mine_assigned"|"partner_assigned"}
 {"type":"none"}
 
@@ -93,11 +94,17 @@ RULES
    - "תוסיף הערה ל-3 ש..." / "רשום על הפגישה ש..." → note
    - "מה ההערות על 3" / "מה כתוב על הפגישה" → show_notes
    - Careful: if it describes something NEW to do, it is an "add", not a note.
-8. If the user reports finishing something ("סיימתי עם הארנונה", "שילמתי"), emit "complete" and match it to the closest task by meaning — use its number.
-9. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
-10. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
-11. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.
-12. Never output explanations, markdown, or text outside the JSON object.`;
+8. OUTGOING MESSAGES — the user can attach a WhatsApp message to a task, to be sent later to a third party after they approve it.
+   - "תכין הודעה ליוסי האינסטלטור: היי יוסי, אפשר לקבוע לשבוע הבא?" → compose_message
+   - "תזכיר לי לתאם תיקון מחר ב-9, ותכין הודעה ליוסי ש..." → an "add" AND a compose_message with ref:"new" (attached to the task just added)
+   - CRITICAL — "body" must be the user's OWN words. Never rewrite, polish, translate, expand or add greetings, signatures or emoji they did not say. The only change allowed is turning reported speech into direct speech ("תגיד לו שאני פנוי" → "אני פנוי"), keeping their exact register and wording.
+   - "send_at" is when to ASK the user for approval — default null (the task's own due time is used by the app).
+   - Never invent a phone number. Put the name in "to_name" and leave "to_phone" null unless the user dictated actual digits.
+9. If the user reports finishing something ("סיימתי עם הארנונה", "שילמתי"), emit "complete" and match it to the closest task by meaning — use its number.
+10. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
+11. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
+12. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.
+13. Never output explanations, markdown, or text outside the JSON object.`;
 }
 
 // ── פענוח הודעה ─────────────────────────────────────────────────────

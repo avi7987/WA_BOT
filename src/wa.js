@@ -240,6 +240,71 @@ function isRecentlySent(map, text) {
   return Date.now() - t < 5 * 60e3;
 }
 
+// ── שליחה לאדם אחר ──────────────────────────────────────────────────
+/**
+ * שולח הודעה לנמען חיצוני מהחשבון של המשתמש.
+ *
+ * ההודעה יוצאת מהמספר שלו כמו כל הודעה אחרת — אין שום סימן שהיא
+ * אוטומטית. שני דברים נוספים שומרים על התחושה האנושית:
+ * השהיה אקראית קצרה (לא נשלח ב-09:00:00 בול), ומחוון "מקליד...".
+ *
+ * הטקסט נשלח בדיוק כפי שהתקבל. אין תוספות, אין חתימה, אין עיצוב.
+ */
+export async function sendToContact(session, phone, text, opts = {}) {
+  if (session.state !== 'ready') throw new Error('הוואטסאפ לא מחובר כרגע');
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length < 9) throw new Error('מספר לא תקין');
+  const chatId = `${digits}@c.us`;
+
+  if (opts.jitter !== false) {
+    await new Promise((r) => setTimeout(r, Math.floor(Math.random() * 90_000)));
+  }
+
+  // מחוון הקלדה — נחמד אם עובד, לא קריטי אם לא
+  try {
+    const chat = await session.client.getChatById(chatId);
+    await chat.sendStateTyping();
+    await new Promise((r) => setTimeout(r, Math.min(4000, 400 + text.length * 25)));
+    await chat.clearState();
+  } catch { /* גרסאות מסוימות לא תומכות — ממשיכים לשליחה */ }
+
+  const msg = await session.client.sendMessage(chatId, text);
+  return { id: serialId(msg), chatId };
+}
+
+/**
+ * מחפש איש קשר לפי שם. מחזיר עד 5 מועמדים.
+ * לא שומר את רשימת אנשי הקשר בשום מקום — רק הנמען שנבחר נשמר,
+ * על ההודעה עצמה.
+ */
+export async function findContacts(session, query) {
+  if (session.state !== 'ready') return [];
+  const q = String(query || '').trim().toLowerCase();
+  if (q.length < 2) return [];
+  try {
+    const all = await session.client.getContacts();
+    const scored = [];
+    for (const c of all) {
+      if (!c.id || c.id.server !== 'c.us' || c.isMe || c.isGroup) continue;
+      const name = c.name || c.pushname || c.verifiedName || '';
+      if (!name) continue;
+      const lower = name.toLowerCase();
+      let score = 0;
+      if (lower === q) score = 1;
+      else if (lower.startsWith(q)) score = 0.9;
+      else if (lower.includes(q)) score = 0.75;
+      else if (q.split(/\s+/).every((w) => lower.includes(w))) score = 0.6;
+      if (score) scored.push({ name, phone: c.id.user, score, saved: !!c.isMyContact });
+    }
+    return scored
+      .sort((a, b) => (b.saved - a.saved) || (b.score - a.score))
+      .slice(0, 5);
+  } catch (e) {
+    console.error('חיפוש איש קשר נכשל:', e.message || e);
+    return [];
+  }
+}
+
 // ── הקלטה קולית ─────────────────────────────────────────────────────
 export const isVoiceMessage = (msg) => msg.type === 'ptt' || msg.type === 'audio';
 

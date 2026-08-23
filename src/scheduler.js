@@ -7,6 +7,7 @@
 // =====================================================================
 import * as db from './db.js';
 import * as R from './render.js';
+import { runOutbound } from './outbound.js';
 import { ilMinutesNow, hhmmToMinutes, withinQuietWindow, daysFromToday } from './util.js';
 
 const TICK_MS = 60_000;
@@ -36,6 +37,7 @@ async function tick(deps) {
       }
     }
     await runReminders(deps);
+    await runOutbound(deps);
   } catch (e) {
     console.error('מתזמן:', e.message || e);
   }

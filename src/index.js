@@ -8,7 +8,7 @@ import 'dotenv/config';
 import http from 'http';
 import * as db from './db.js';
 import * as llm from './llm.js';
-import { createSession, downloadVoice, isVoiceMessage } from './wa.js';
+import { createSession, downloadVoice, isVoiceMessage, sendToContact, findContacts } from './wa.js';
 import { handleMessage } from './brain.js';
 import { startScheduler } from './scheduler.js';
 import { renderHelp } from './render.js';
@@ -52,6 +52,18 @@ const deps = {
   partnerOf,
   notify: sendTo,
   sendTo,
+  sessionOf: sessionFor,
+  // שליחה לאנשים אחרים וחיפוש אנשי קשר — מוזרקים, כדי שהלוגיקה
+  // תהיה ניתנת לבדיקה בלי וואטסאפ אמיתי
+  sendToContact: async (user, phone, text) => {
+    const s = sessionFor(user);
+    if (!s) throw new Error('הוואטסאפ לא מחובר');
+    return sendToContact(s, phone, text);
+  },
+  findContacts: async (user, q) => {
+    const s = sessionFor(user);
+    return s ? findContacts(s, q) : [];
+  },
   users: () => [...users.values()],
 };
 

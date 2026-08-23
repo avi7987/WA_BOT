@@ -36,9 +36,11 @@ function line(t, n, mode = 'default', now = new Date(), opts = {}) {
   const who = t.assigned_to && opts.nameOf ? opts.nameOf(t.assigned_to) : null;
   // הערות מתקפלות לסימון בלבד — הן כבר נדחפו בזמן אמת כשנכתבו
   const notes = opts.noteCounts?.get(t.id) || 0;
+  const msgs = opts.messageCounts?.get(t.id) || 0;
   const tail = (badges.length ? ' ' + badges.join('') : '')
     + (who ? `  👤 ${who}` : '')
-    + (notes ? `  💬${notes > 1 ? notes : ''}` : '');
+    + (notes ? `  💬${notes > 1 ? notes : ''}` : '')
+    + (msgs ? '  📤' : '');
 
   let prefix = '';
   if (t.due_at) {
@@ -348,6 +350,13 @@ export function renderHelp(opts = {}) {
     rtl('*תזכורות* — משימה עם שעה מקבלת תזכורת 15 דקות לפני,'),
     rtl('ואפשר לענות עליה: _1_ = בוצע · _2_ = דחה בשעה · _3_ = דחה למחר'),
     '',
+    rtl('*הודעות לאנשים אחרים* — נשלחות רק אחרי שאתה מאשר:'),
+    rtl('_"תכין הודעה ליוסי האינסטלטור: היי, אפשר לקבוע לשבוע הבא?"_'),
+    rtl('במועד תקבל את ההודעה המדויקת לאישור, עם השם והמספר של הנמען.'),
+    rtl('_1 = שלח · 2 = ערוך · 3 = בטל · 4 = דחה בשעה_'),
+    rtl('משימה עם הודעה ממתינה מסומנת ב-📤.'),
+    rtl('_"הודעות"_ · _"הודעה 3"_ · _"בטל הודעה 3"_ · _"נשלחו היום"_'),
+    '',
     rtl('*פקודות שימושיות:*'),
     rtl('• _רשימה_ — כל מה שפתוח'),
     rtl('• _היום_ / _מחר_ / _השבוע_ / _באיחור_'),
@@ -418,6 +427,105 @@ export function renderNoteFromPartner(actorName, task, body) {
     '',
     rtl(`"${body}"`),
   ].join('\n');
+}
+
+// ── הודעות יוצאות ───────────────────────────────────────────────────
+const fmtPhone = (p) => {
+  const d = String(p || '').replace(/\D/g, '').replace(/^972/, '0');
+  return d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : d;
+};
+
+/**
+ * כרטיס האישור. שלושה דברים חייבים להופיע כאן תמיד:
+ * השם, המספר המלא, והטקסט המדויק — כדי שאפשר יהיה לתפוס
+ * "הנמען הלא נכון" לפני השליחה ולא אחריה.
+ */
+export function renderApprovalRequest(msg, task) {
+  return [
+    rtl('📤 *מוכן לשליחה — צריך את אישורך*'),
+    SEP,
+    rtl(`אל: *${msg.to_name || 'לא מזוהה'}*`),
+    rtl(`    ${fmtPhone(msg.to_phone)}`),
+    task ? rtl(`בקשר ל: ${task.title}`) : null,
+    SEP,
+    rtl('┄┄┄┄┄┄┄┄┄┄┄┄┄'),
+    rtl(msg.body),
+    rtl('┄┄┄┄┄┄┄┄┄┄┄┄┄'),
+    SEP,
+    rtl('1 = שלח   2 = ערוך   3 = בטל   4 = דחה בשעה'),
+  ].filter(Boolean).join('\n');
+}
+
+export function renderMessageDraft(msg, task) {
+  const when = msg.send_at ? `תוצע לאישור ב-${fmtDayName(new Date(msg.send_at))}, ${fmtTime(new Date(msg.send_at))}` : 'ידני — תישלח רק כשתבקש';
+  const state = { draft: 'טיוטה', scheduled: 'מתוזמנת', awaiting_approval: 'ממתינה לאישורך' }[msg.status] || msg.status;
+  return [
+    rtl(`📤 *הודעה ל${msg.to_name || fmtPhone(msg.to_phone)}*`),
+    rtl(`    ${fmtPhone(msg.to_phone)}`),
+    task ? rtl(`בקשר ל: ${task.title}`) : null,
+    SEP,
+    rtl(`"${msg.body}"`),
+    SEP,
+    rtl(`_${state} · ${when}_`),
+    rtl('_"שלח הודעה N" · "שנה הודעה N: ..." · "בטל הודעה N"_'),
+  ].filter(Boolean).join('\n');
+}
+
+export function renderMessageAttached(msg, opts = {}) {
+  const when = msg.send_at
+    ? `תוצע לאישורך ב-${fmtDayName(new Date(msg.send_at))} ${fmtTime(new Date(msg.send_at))}`
+    : 'תישלח רק כשתבקש';
+  return [
+    rtl(`📤 הודעה מוכנה ל*${msg.to_name || fmtPhone(msg.to_phone)}* (${fmtPhone(msg.to_phone)})`),
+    rtl(`"${msg.body}"`),
+    rtl(`_${when} · שום דבר לא נשלח בלי אישורך_`),
+  ].join('\n');
+}
+
+export function renderSent(msg) {
+  return rtl(`✅ נשלח ל*${msg.to_name || fmtPhone(msg.to_phone)}*: "${msg.body}"`);
+}
+
+export function renderExpired(msg, hours) {
+  return [
+    rtl(`⏳ ההודעה ל*${msg.to_name || fmtPhone(msg.to_phone)}* *לא נשלחה*.`),
+    rtl(`חלפו ${hours} שעות בלי אישור, אז החזרתי אותה לטיוטה.`),
+    rtl('_"הודעות" כדי לראות מה ממתין._'),
+  ].join('\n');
+}
+
+export function renderHeldForQuietHours(msg) {
+  return rtl(`🌙 מאושר, אבל עכשיו שעת שקט — ההודעה ל${msg.to_name || fmtPhone(msg.to_phone)} תוצע לך שוב בבוקר.`);
+}
+
+export function renderMessageList(rows, tasksById) {
+  if (!rows.length) return rtl('אין הודעות ממתינות.');
+  const lines = [rtl('📤 *הודעות ממתינות*'), SEP];
+  rows.forEach((m, i) => {
+    const t = tasksById.get(m.task_id);
+    const state = { draft: 'טיוטה', scheduled: 'מתוזמנת', awaiting_approval: '⚠️ ממתינה לאישורך' }[m.status] || m.status;
+    lines.push(rtl(`${i + 1} · אל ${m.to_name || fmtPhone(m.to_phone)} — ${state}`));
+    lines.push(rtl(`   "${m.body.slice(0, 70)}${m.body.length > 70 ? '…' : ''}"`));
+    if (t) lines.push(rtl(`   _${t.title}_`));
+  });
+  return lines.join('\n');
+}
+
+export function renderContactChoice(query, contacts) {
+  const lines = [rtl(`🔍 מצאתי כמה תחת "${query}". למי לשלוח?`), SEP];
+  contacts.forEach((c, i) => lines.push(rtl(`${i + 1} · ${c.name} — ${fmtPhone(c.phone)}`)));
+  lines.push(SEP, rtl('_ענה במספר, או "בטל"._'));
+  return lines.join('\n');
+}
+
+export function renderSentToday(rows) {
+  if (!rows.length) return rtl('לא נשלחו היום הודעות.');
+  const lines = [rtl(`📤 *נשלחו היום* (${rows.length})`), SEP];
+  for (const r of rows) {
+    lines.push(rtl(`• ${fmtTime(new Date(r.sent_at))} — ${r.to_name || fmtPhone(r.to_phone)}`));
+    lines.push(rtl(`  "${r.body.slice(0, 60)}${r.body.length > 60 ? '…' : ''}"`));
+  }
+  return lines.join('\n');
 }
 
 // ── שאלת הבהרה ──────────────────────────────────────────────────────
