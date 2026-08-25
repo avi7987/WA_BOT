@@ -13,6 +13,7 @@ const DEFAULTS = {
   pa_settings: () => ({}),
   pa_messages: () => ({ id: randomUUID(), status: 'draft', send_at: null, to_name: null, approved_by: null, approved_at: null, asked_at: null, sent_at: null, last_error: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
   pa_sent_log: () => ({ id: Math.random(), sent_at: new Date().toISOString(), day: new Date().toISOString().slice(0,10) }),
+  pa_events: () => ({ id: randomUUID(), guests: [], all_day: false, status: 'created', google_id: null, html_link: null, ends_at: null, location: null, description: null, task_id: null, last_error: null, created_at: new Date().toISOString() }),
   pa_requests: () => ({ id: randomUUID(), status: 'new', reply: null, source_text: null, resolved_at: null, created_at: new Date().toISOString() }),
   pa_req_refs: () => ({ created_at: new Date().toISOString() }),
   pa_lists: () => ({ id: randomUUID(), aliases: [], icon: '📋', shared: true, created_at: new Date().toISOString() }),
@@ -55,6 +56,7 @@ class Q {
   delete() { this.op = 'delete'; return this; }
 
   eq(c, v) { this.filters.push(['eq', c, v]); return this; }
+  neq(c, v) { this.filters.push(['neq', c, v]); return this; }
   gte(c, v) { this.filters.push(['gte', c, v]); return this; }
   lte(c, v) { this.filters.push(['lte', c, v]); return this; }
   is(c, v) { this.filters.push(['is', c, v]); return this; }
@@ -71,6 +73,7 @@ class Q {
     for (const [op, c, v] of this.filters) {
       const cur = row[c];
       if (op === 'eq' && cur !== v) return false;
+      if (op === 'neq' && cur === v) return false;
       if (op === 'gte' && !(cur >= v)) return false;
       if (op === 'lte' && !(cur !== null && cur !== undefined && cur <= v)) return false;
       if (op === 'is' && !(v === null ? cur === null || cur === undefined : cur === v)) return false;

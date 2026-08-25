@@ -13,6 +13,7 @@ import * as R from './render.js';
 import * as llm from './llm.js';
 import * as OB from './outbound.js';
 import * as L from './lists.js';
+import * as CAL from './calendar.js';
 import { parseCommand, parseTaskFallback, extractDue, mentionsTime, looksLikeTaskReference, classifyIntent, mentionedList } from './parse.js';
 import { rtl as rtlLine } from './util.js';
 
@@ -229,6 +230,13 @@ async function handleCommand(user, cmd, deps) {
       return applyVerb(user, 'note_show', {}, ids, deps);
     }
 
+    // ── זימונים ביומן ──
+    case 'event_list':
+      return R.renderEvents(await db.liveCalendarEvents(user.id, 10));
+
+    case 'event_cancel':
+      return cancelEventByRef(user, cmd.ref);
+
     // ── תיבת רעיונות ──
     case 'idea_add':
       return saveIdea(user, cmd.text, cmd.text);
@@ -401,6 +409,21 @@ async function execActions(user, parsed, sourceText, deps) {
           outputs.push(removed ? R.renderItemRemoved(list, removed) : 'לא מצאתי את הפריט.');
           break;
         }
+        case 'create_event': {
+          // בלי שעה מפורשת בטקסט — זה זימון יום שלם, לא ניחוש של שעה
+          const allDay = a.all_day === true || !mentionsTime(sourceText);
+          outputs.push(await createEvent(user, {
+            title: a.title,
+            start: a.start,
+            end: a.end || null,
+            allDay,
+            location: a.location || null,
+            guests: a.guests || [],
+            taskId: a.also_task ? (addResults[addResults.length - 1]?.task?.id || null) : null,
+          }, deps));
+          break;
+        }
+
         case 'capture_idea':
           outputs.push(await saveIdea(user, a.body, sourceText));
           break;
@@ -681,6 +704,70 @@ async function applyVerb(user, verb, payload, ids, deps) {
     default:
       return 'לא הבנתי מה לעשות.';
   }
+}
+
+// ── זימונים ביומן ───────────────────────────────────────────────────
+/**
+ * יוצר זימון. אם היומן מחובר — האירוע נוצר באמת ואורחים מקבלים
+ * הזמנה. אם לא (או אם החיבור נכשל) — מחזיר קישור בלחיצה אחת,
+ * כדי שכשל בחיבור לא ישתק את הפיצ'ר.
+ */
+async function createEvent(user, spec, deps) {
+  const start = spec.start ? new Date(spec.start) : null;
+  if (!start || Number.isNaN(start.getTime())) return 'לא הבנתי מתי לקבוע את הזימון.';
+
+  const { emails, unknown } = await CAL.resolveGuests(spec.guests || []);
+  const allDay = !!spec.allDay;
+  const defaultMin = Number(await db.getSetting('calendar_default_duration_min', 60)) || 60;
+  const end = allDay ? null : (spec.end ? new Date(spec.end) : new Date(start.getTime() + defaultMin * 60e3));
+
+  const payload = {
+    title: spec.title, start, end, allDay,
+    location: spec.location || null, description: spec.description || null, guests: emails,
+  };
+
+  const row = {
+    task_id: spec.taskId || null,
+    title: spec.title,
+    starts_at: start.toISOString(),
+    ends_at: end ? end.toISOString() : null,
+    all_day: allDay,
+    location: spec.location || null,
+    description: spec.description || null,
+    guests: emails,
+    created_by: user.id,
+  };
+
+  const warning = unknown.length
+    ? `לא ידעתי את המייל של ${unknown.join(', ')} — לא הוזמנו.`
+    : null;
+
+  if (!CAL.isConnected()) {
+    const ev = await db.createCalendarEvent({ ...row, status: 'link_only' });
+    return R.renderEventLink(ev, CAL.eventLink(payload));
+  }
+
+  try {
+    const { googleId, link } = await CAL.createEvent(payload);
+    const ev = await db.createCalendarEvent({ ...row, google_id: googleId, html_link: link, status: 'created' });
+    return R.renderEventCreated(ev, { warning });
+  } catch (e) {
+    console.error('יומן:', e.message || e);
+    // נפילה מכובדת: עדיין נותנים לו משהו שאפשר להשתמש בו עכשיו
+    const ev = await db.createCalendarEvent({ ...row, status: 'link_only', last_error: String(e.message || e).slice(0, 300) });
+    return `${R.renderEventLink(ev, CAL.eventLink(payload))}\n\n_(החיבור האוטומטי נכשל: ${e.message})_`;
+  }
+}
+
+async function cancelEventByRef(user, ref) {
+  const events = await db.liveCalendarEvents(user.id);
+  const ev = ref ? events[ref - 1] : events[0];
+  if (!ev) return 'לא מצאתי זימון לבטל.';
+  if (ev.google_id && CAL.isConnected()) {
+    try { await CAL.deleteEvent(ev.google_id); } catch (e) { return `לא הצלחתי לבטל ביומן: ${e.message}`; }
+  }
+  await db.updateCalendarEvent(ev.id, { status: 'cancelled' });
+  return R.renderEventCancelled(ev);
 }
 
 // ── תיבת רעיונות ────────────────────────────────────────────────────

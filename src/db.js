@@ -187,6 +187,35 @@ export async function sentToday() {
   return data || [];
 }
 
+// ── זימונים ביומן ───────────────────────────────────────────────────
+export async function createCalendarEvent(row) {
+  const { data, error } = await supabase.from('pa_events').insert(row).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateCalendarEvent(id, fields) {
+  const { data } = await supabase.from('pa_events').update(fields).eq('id', id).select().maybeSingle();
+  return data || null;
+}
+
+// הזימונים החיים של משתמש, החדשים קודם
+export async function liveCalendarEvents(userId, limit = 20) {
+  const { data } = await supabase.from('pa_events')
+    .select('*').eq('created_by', userId).neq('status', 'cancelled')
+    .order('created_at', { ascending: false }).limit(limit);
+  return data || [];
+}
+
+export async function eventsForTasks(taskIds) {
+  const counts = new Map();
+  if (!taskIds.length) return counts;
+  const { data } = await supabase.from('pa_events')
+    .select('task_id').in('task_id', taskIds).neq('status', 'cancelled');
+  for (const r of (data || [])) if (r.task_id) counts.set(r.task_id, (counts.get(r.task_id) || 0) + 1);
+  return counts;
+}
+
 // ── תיבת רעיונות (שיפורים לבוט עצמו) ────────────────────────────────
 export async function createRequest(row) {
   const { data, error } = await supabase.from('pa_requests').insert(row).select().single();

@@ -70,6 +70,7 @@ Allowed actions:
 {"type":"list_show","list":"name of the reference list","area":"city/region or null","tag":"or null"}
 {"type":"list_remove","list":"...","ref": <number shown in that list>}
 {"type":"list_create","name":"..."}
+{"type":"create_event","title":"...","start":"ISO-8601","end":"ISO-8601 or null","all_day":true|false,"location":"...|null","guests":["name or email"],"also_task":true|false}
 {"type":"capture_idea","body":"the improvement request, cleanly phrased in Hebrew"}
 {"type":"ask_destination","text":"the item, cleanly phrased","list":"best-guess list name or null"}
 {"type":"already_supported","explanation":"one or two Hebrew lines telling the user how to do it today"}
@@ -132,6 +133,12 @@ ${ctx.lists?.length ? `   Existing lists: ${ctx.lists.map((l) => `"${l.name}"${l
      • preparing a WhatsApp message to someone, approved before sending
      • voice notes for everything
      • changing the morning digest time ("סיכום בוקר 07:30")
+11a. CALENDAR EVENTS — the words "זימון" / "תייצר זימון" / "תקבע ביומן" / "תוסיף ליומן" mean a Google Calendar event, NOT a task.
+   - "תייצר זימון לפגישה עם רו״ח מחר ב-14:00" → create_event, all_day:false
+   - "זימון לביקור אצל ההורים ביום שישי" (no hour given) → create_event with all_day:true — a tentative all-day block on that date. NEVER invent an hour.
+   - Guests: "תוסיף גם את איה" / "תזמן גם את איה" / "עם איה" → "guests":["איה"]. Put the NAME; the app resolves it to an email. Only put an actual address if the user dictated one.
+   - "also_task": true only if they clearly also want a reminder task. Default false — an event is not a task.
+   - Without the calendar words, a meeting with a time is a normal task ("פגישה עם רו״ח מחר ב-14:00" → add).
 11b. WHERE DOES IT BELONG — before creating anything, decide between three destinations. Apply this test in order:
    a) Is it about what the BOT should be able to do? → capture_idea
    b) Does it name, or clearly belong to, one of the reference lists above? → list_add

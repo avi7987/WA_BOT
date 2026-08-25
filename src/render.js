@@ -363,6 +363,11 @@ export function renderHelp(opts = {}) {
     rtl('_"תמחק מהמסעדות 2"_ · _"תפתח רשימה של ספרים"_ · _"רשימות"_'),
     rtl('הן *לא* מופיעות בסיכום הבוקר ולא ברשימת המשימות — רק כשתבקש.'),
     '',
+    rtl('*זימונים ביומן* — המילה "זימון" מפעילה את זה:'),
+    rtl('_"תייצר זימון לפגישה עם רו״ח מחר ב-14:00, תוסיף גם את איה"_'),
+    rtl('_"זימון לביקור אצל ההורים ביום שישי"_ — בלי שעה, נכנס כיום שלם טנטטיבי'),
+    rtl('_"זימונים"_ · _"תבטל את הזימון"_'),
+    '',
     rtl('*תיבת רעיונות* — משהו שהיית רוצה שאדע לעשות:'),
     rtl('_"רעיון: תוסיף אפשרות לצרף תמונות"_ · _"באג: התזכורת הגיעה פעמיים"_'),
     rtl('נשמר ולא הולך לאיבוד. _"רעיונות"_ מציג את התיבה.'),
@@ -536,6 +541,60 @@ export function renderSentToday(rows) {
     lines.push(rtl(`• ${fmtTime(new Date(r.sent_at))} — ${r.to_name || fmtPhone(r.to_phone)}`));
     lines.push(rtl(`  "${r.body.slice(0, 60)}${r.body.length > 60 ? '…' : ''}"`));
   }
+  return lines.join('\n');
+}
+
+// ── זימונים ביומן ───────────────────────────────────────────────────
+function eventWhen(ev) {
+  const d = new Date(ev.starts_at);
+  if (ev.all_day) return `${fmtDayName(d)}, ${fmtDate(d)} · כל היום (טנטטיבי)`;
+  const end = ev.ends_at ? new Date(ev.ends_at) : null;
+  return `${fmtDayName(d)}, ${fmtDate(d)} · ${fmtTime(d)}${end ? `–${fmtTime(end)}` : ''}`;
+}
+
+export function renderEventCreated(ev, opts = {}) {
+  const lines = [
+    rtl('📅 *נוסף ליומן*'),
+    rtl(`*${ev.title}*`),
+    rtl(eventWhen(ev)),
+  ];
+  if (ev.location) lines.push(rtl(`📍 ${ev.location}`));
+  if ((ev.guests || []).length) lines.push(rtl(`👥 הוזמנו: ${ev.guests.join(', ')}`));
+  if (ev.html_link) { lines.push(SEP); lines.push(rtl(ev.html_link)); }
+  lines.push(SEP);
+  lines.push(rtl('_"תבטל את הזימון" מבטל אותו ומודיע למוזמנים._'));
+  if (opts.warning) lines.push(rtl(`_${opts.warning}_`));
+  return lines.join('\n');
+}
+
+// כשהיומן לא מחובר — קישור בלחיצה אחת, כדי שהפיצ'ר שימושי בכל מקרה
+export function renderEventLink(ev, link) {
+  return [
+    rtl('📅 *מוכן ליומן*'),
+    rtl(`*${ev.title}*`),
+    rtl(eventWhen(ev)),
+    (ev.guests || []).length ? rtl(`👥 ${ev.guests.join(', ')}`) : null,
+    SEP,
+    rtl(link),
+    SEP,
+    rtl('_לחיצה תפתח את יומן גוגל עם הכל מוכן — רק לשמור._'),
+    rtl('_(לחיבור אוטומטי מלא, בלי הלחיצה הזו — תגיד לי ונחבר את היומן.)_'),
+  ].filter(Boolean).join('\n');
+}
+
+export function renderEventCancelled(ev) {
+  return rtl(`🗑️ הזימון "${ev.title}" בוטל${(ev.guests || []).length ? ' והמוזמנים עודכנו' : ''}.`);
+}
+
+export function renderEvents(events) {
+  if (!events.length) return rtl('אין זימונים שיצרתי לאחרונה.');
+  const lines = [rtl(`📅 *זימונים אחרונים* (${events.length})`), SEP];
+  events.forEach((ev, i) => {
+    lines.push(rtl(`${i + 1}. *${ev.title}* — ${eventWhen(ev)}`));
+    if ((ev.guests || []).length) lines.push(rtl(`   _${ev.guests.join(', ')}_`));
+  });
+  lines.push(SEP);
+  lines.push(rtl('_"תבטל זימון 2"_'));
   return lines.join('\n');
 }
 

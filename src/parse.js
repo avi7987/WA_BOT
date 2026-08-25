@@ -261,6 +261,12 @@ export function parseCommand(raw) {
   m = /^(?:הערות|מה ההערות(?: על)?|תראה(?: לי)? (?:את ה)?הערות(?: של| על)?|הצג הערות)\s*(\d+)$/.exec(t);
   if (m) return { kind: 'note_show', ref: +m[1] };
 
+  // ── זימונים ביומן ──
+  if (/^(זימונים|הזימונים|יומן)$/.test(t)) return { kind: 'event_list' };
+
+  m = /^(?:תבטל|בטל)\s+(?:את\s+ה)?זימון(?:\s+(\d{1,3}))?$/.exec(t);
+  if (m) return { kind: 'event_cancel', ref: m[1] ? +m[1] : null };
+
   // ── תיבת רעיונות ──
   m = /^(?:רעיון|בקשה|הצעה|שיפור|פיצ'ר|באג)\s*[:,\-–]\s*(.+)$/.exec(t);
   if (m) return { kind: 'idea_add', text: m[1].trim() };

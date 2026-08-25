@@ -9,7 +9,8 @@
     "test": "node --test",
     "preview": "node scripts/preview-digest.js",
     "check": "node scripts/check-setup.js",
-    "ideas": "node scripts/ideas.js"
+    "ideas": "node scripts/ideas.js",
+    "calendar": "node scripts/connect-calendar.js"
   },
   "engines": {
     "node": ">=22"
