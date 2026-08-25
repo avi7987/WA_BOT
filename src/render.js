@@ -363,6 +363,11 @@ export function renderHelp(opts = {}) {
     rtl('_"תמחק מהמסעדות 2"_ · _"תפתח רשימה של ספרים"_ · _"רשימות"_'),
     rtl('הן *לא* מופיעות בסיכום הבוקר ולא ברשימת המשימות — רק כשתבקש.'),
     '',
+    rtl('*תיבת רעיונות* — משהו שהיית רוצה שאדע לעשות:'),
+    rtl('_"רעיון: תוסיף אפשרות לצרף תמונות"_ · _"באג: התזכורת הגיעה פעמיים"_'),
+    rtl('נשמר ולא הולך לאיבוד. _"רעיונות"_ מציג את התיבה.'),
+    rtl('אם מה שביקשת כבר אפשרי — אגיד לך איך, במקום לרשום רעיון מיותר.'),
+    '',
     rtl('*פקודות שימושיות:*'),
     rtl('• _רשימה_ — כל מה שפתוח'),
     rtl('• _היום_ / _מחר_ / _השבוע_ / _באיחור_'),
@@ -532,6 +537,48 @@ export function renderSentToday(rows) {
     lines.push(rtl(`  "${r.body.slice(0, 60)}${r.body.length > 60 ? '…' : ''}"`));
   }
   return lines.join('\n');
+}
+
+// ── תיבת רעיונות ────────────────────────────────────────────────────
+export function renderIdeaSaved(req, count) {
+  return [
+    rtl('💡 *נרשם.*'),
+    rtl(`"${req.body}"`),
+    '',
+    rtl(`_${count === 1 ? 'זה הרעיון הראשון בתיבה' : `${count} רעיונות ממתינים`} · "רעיונות" כדי לראות._`),
+  ].join('\n');
+}
+
+export function renderIdeas(reqs) {
+  if (!reqs.length) {
+    return [
+      rtl('💡 *תיבת הרעיונות ריקה.*'),
+      SEP,
+      rtl('_כשעולה לך רעיון לשיפור — "רעיון: ..." ואשמור אותו._'),
+    ].join('\n');
+  }
+  const lines = [rtl(`💡 *תיבת הרעיונות* (${reqs.length})`), SEP];
+  reqs.forEach((r, i) => {
+    const mark = r.status === 'planned' ? ' 🔨' : '';
+    lines.push(rtl(`${i + 1}. ${r.body}${mark}`));
+    if (r.reply) lines.push(rtl(`   _${r.reply}_`));
+  });
+  lines.push(SEP);
+  lines.push(rtl(RULE));
+  lines.push(rtl('_"רעיון בוצע 2" · "מחק רעיון 3"_'));
+  lines.push(rtl('_🔨 = בעבודה_'));
+  return lines.join('\n');
+}
+
+// כשמבקשים משהו שהבוט כבר יודע לעשות — עדיף לומר את זה מאשר לרשום רעיון
+export function renderAlreadySupported(explanation) {
+  return [
+    rtl('✨ *זה כבר אפשרי.*'),
+    '',
+    rtl(explanation),
+    '',
+    rtl('_אם התכוונת למשהו אחר — תנסח שוב ואשמור כרעיון._'),
+  ].join('\n');
 }
 
 // ── רשימות ייחוס ────────────────────────────────────────────────────

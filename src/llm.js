@@ -70,6 +70,8 @@ Allowed actions:
 {"type":"list_show","list":"name of the reference list","area":"city/region or null","tag":"or null"}
 {"type":"list_remove","list":"...","ref": <number shown in that list>}
 {"type":"list_create","name":"..."}
+{"type":"capture_idea","body":"the improvement request, cleanly phrased in Hebrew"}
+{"type":"already_supported","explanation":"one or two Hebrew lines telling the user how to do it today"}
 {"type":"list","filter":"digest"|"today"|"tomorrow"|"week"|"overdue"|"all"|"shared"|"done"|"mine_assigned"|"partner_assigned"}
 {"type":"none"}
 
@@ -119,6 +121,16 @@ ${ctx.lists?.length ? `   Existing lists: ${ctx.lists.map((l) => `"${l.name}"${l
    - Put the location exactly as the user said it in "location", and a clean city or region name in "area" (e.g. "פלורנטין תל אביב" → area "תל אביב"; "איפשהו בצפון" → area "צפון").
    - Short descriptors the user throws in ("בשרי", "יקר", "טוב לילדים", "סושי") go in "tags".
    - A reference item NEVER becomes a task, and a task never goes into a list. If the user says "תזכיר לי להזמין מקום במסעדה X" that IS a task; "תוסיף את מסעדה X לרשימה" is a list item.
+11. IMPROVEMENT REQUESTS — when the user asks for something the BOT should be able to do (not something they need to do), it is not a task.
+   - "היה נחמד אם היית יודע לצרף תמונות" / "תוסיף אפשרות לסנכרן ליומן" / "באג: התזכורת הגיעה פעמיים" → capture_idea
+   - Distinguish carefully: a request about the BOT's abilities is an idea; a request about ${ctx.userName}'s life is a task. "תדע לזהות כתובות" = idea. "לקנות כתובת מתנה" = task.
+   - IMPORTANT — before capturing, check whether it is ALREADY possible. If it is, emit "already_supported" with a short explanation instead. Things that already work today:
+     • creating any new reference list ("תפתח רשימה של ספרים")
+     • adding places with location and tags, and filtering by area
+     • assigning a task to ${ctx.partnerName || 'the partner'}, notes on tasks, reminders before the due time
+     • preparing a WhatsApp message to someone, approved before sending
+     • voice notes for everything
+     • changing the morning digest time ("סיכום בוקר 07:30")
 12. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
 13. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
 14. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.

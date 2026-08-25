@@ -13,6 +13,8 @@ const DEFAULTS = {
   pa_settings: () => ({}),
   pa_messages: () => ({ id: randomUUID(), status: 'draft', send_at: null, to_name: null, approved_by: null, approved_at: null, asked_at: null, sent_at: null, last_error: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
   pa_sent_log: () => ({ id: Math.random(), sent_at: new Date().toISOString(), day: new Date().toISOString().slice(0,10) }),
+  pa_requests: () => ({ id: randomUUID(), status: 'new', reply: null, source_text: null, resolved_at: null, created_at: new Date().toISOString() }),
+  pa_req_refs: () => ({ created_at: new Date().toISOString() }),
   pa_lists: () => ({ id: randomUUID(), aliases: [], icon: '📋', shared: true, created_at: new Date().toISOString() }),
   pa_list_items: () => ({ id: randomUUID(), tags: [], location_text: null, area: null, note: null, created_at: new Date().toISOString() }),
   pa_item_refs: () => ({ created_at: new Date().toISOString() }),
@@ -26,6 +28,7 @@ const UNIQUE = {
   pa_log: ['user_id', 'kind', 'day'],
   pa_settings: ['key'],
   pa_item_refs: ['user_id', 'n'],
+  pa_req_refs: ['user_id', 'n'],
 };
 
 export function createFakeSupabase() {

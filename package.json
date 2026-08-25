@@ -8,7 +8,8 @@
     "start": "node src/index.js",
     "test": "node --test",
     "preview": "node scripts/preview-digest.js",
-    "check": "node scripts/check-setup.js"
+    "check": "node scripts/check-setup.js",
+    "ideas": "node scripts/ideas.js"
   },
   "engines": {
     "node": ">=22"

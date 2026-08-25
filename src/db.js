@@ -187,6 +187,42 @@ export async function sentToday() {
   return data || [];
 }
 
+// ── תיבת רעיונות (שיפורים לבוט עצמו) ────────────────────────────────
+export async function createRequest(row) {
+  const { data, error } = await supabase.from('pa_requests').insert(row).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function openRequests() {
+  const { data } = await supabase.from('pa_requests')
+    .select('*').in('status', ['new', 'planned']).order('created_at');
+  return data || [];
+}
+
+export async function allRequests() {
+  const { data } = await supabase.from('pa_requests').select('*').order('created_at');
+  return data || [];
+}
+
+export async function updateRequest(id, fields) {
+  const { data } = await supabase.from('pa_requests').update(fields).eq('id', id).select().maybeSingle();
+  return data || null;
+}
+
+// מספרי קיצור לרעיונות — שוב מרחב נפרד, כדי ש-"1" יישאר משימה
+export async function setRequestRefs(userId, ids) {
+  await supabase.from('pa_req_refs').delete().eq('user_id', userId);
+  if (!ids.length) return;
+  await supabase.from('pa_req_refs').insert(ids.map((request_id, i) => ({ user_id: userId, n: i + 1, request_id })));
+}
+
+export async function resolveRequestRef(userId, n) {
+  const { data } = await supabase.from('pa_req_refs')
+    .select('request_id').eq('user_id', userId).eq('n', n).maybeSingle();
+  return data?.request_id || null;
+}
+
 // ── רשימות ייחוס (מסעדות, ספרים...) ─────────────────────────────────
 export async function getLists() {
   const { data } = await supabase.from('pa_lists').select('*').order('created_at');

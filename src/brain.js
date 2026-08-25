@@ -205,6 +205,28 @@ async function handleCommand(user, cmd, deps) {
       return applyVerb(user, 'note_show', {}, ids, deps);
     }
 
+    // ── תיבת רעיונות ──
+    case 'idea_add':
+      return saveIdea(user, cmd.text, cmd.text);
+
+    case 'idea_list': {
+      const reqs = await db.openRequests();
+      await db.setRequestRefs(user.id, reqs.map((r) => r.id));
+      return R.renderIdeas(reqs);
+    }
+
+    case 'idea_done':
+    case 'idea_remove': {
+      const id = await db.resolveRequestRef(user.id, cmd.ref);
+      if (!id) return `לא מצאתי רעיון מספר ${cmd.ref}. שלח "רעיונות" לרענון.`;
+      const status = cmd.kind === 'idea_done' ? 'done' : 'rejected';
+      const r = await db.updateRequest(id, { status, resolved_at: new Date().toISOString() });
+      if (!r) return 'לא מצאתי את הרעיון.';
+      return cmd.kind === 'idea_done'
+        ? `✅ "${r.body}" סומן כבוצע.`
+        : `🗑️ "${r.body}" הוסר מהתיבה.`;
+    }
+
     // ── רשימות ייחוס ──
     case 'lists_overview': {
       const lists = await db.getLists();
@@ -355,6 +377,14 @@ async function execActions(user, parsed, sourceText, deps) {
           outputs.push(removed ? R.renderItemRemoved(list, removed) : 'לא מצאתי את הפריט.');
           break;
         }
+        case 'capture_idea':
+          outputs.push(await saveIdea(user, a.body, sourceText));
+          break;
+
+        case 'already_supported':
+          outputs.push(R.renderAlreadySupported(a.explanation || 'זה כבר נתמך.'));
+          break;
+
         case 'list_create': {
           const { list, existed } = await L.createList(user, a.name);
           outputs.push(existed
@@ -590,6 +620,23 @@ async function applyVerb(user, verb, payload, ids, deps) {
     default:
       return 'לא הבנתי מה לעשות.';
   }
+}
+
+// ── תיבת רעיונות ────────────────────────────────────────────────────
+/**
+ * שומר רעיון לשיפור הבוט. אלה לא משימות ולא פריטי רשימה —
+ * הם לא מופיעים בשום מקום עד שמבקשים "רעיונות".
+ */
+async function saveIdea(user, body, sourceText) {
+  const clean = String(body || '').trim();
+  if (!clean) return 'מה הרעיון?';
+  const req = await db.createRequest({
+    body: clean.slice(0, 500),
+    source_text: sourceText || null,
+    created_by: user.id,
+  });
+  const count = (await db.openRequests()).length;
+  return R.renderIdeaSaved(req, count);
 }
 
 // ── רשימות ייחוס ────────────────────────────────────────────────────

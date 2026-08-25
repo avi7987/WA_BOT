@@ -261,6 +261,18 @@ export function parseCommand(raw) {
   m = /^(?:הערות|מה ההערות(?: על)?|תראה(?: לי)? (?:את ה)?הערות(?: של| על)?|הצג הערות)\s*(\d+)$/.exec(t);
   if (m) return { kind: 'note_show', ref: +m[1] };
 
+  // ── תיבת רעיונות ──
+  m = /^(?:רעיון|בקשה|הצעה|שיפור|פיצ'ר|באג)\s*[:,\-–]\s*(.+)$/.exec(t);
+  if (m) return { kind: 'idea_add', text: m[1].trim() };
+
+  if (/^(רעיונות|הרעיונות|תיבת הרעיונות|בקשות|מה ביקשתי)$/.test(t)) return { kind: 'idea_list' };
+
+  m = /^(?:רעיון בוצע|בוצע רעיון|סמן רעיון)\s+(\d{1,3})$/.exec(t);
+  if (m) return { kind: 'idea_done', ref: +m[1] };
+
+  m = /^(?:מחק רעיון|בטל רעיון|הסר רעיון)\s+(\d{1,3})$/.exec(t);
+  if (m) return { kind: 'idea_remove', ref: +m[1] };
+
   // ── רשימות ייחוס ──
   if (/^(רשימות|הרשימות שלי|אילו רשימות|כל הרשימות)$/.test(t)) return { kind: 'lists_overview' };
 
