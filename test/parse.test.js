@@ -1,7 +1,7 @@
 // בדיקות ליבה — התאריכים והפקודות. הרצה:  npm test
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { extractDue, parseCommand, parseTaskFallback, extractRecurrence, extractShared, mentionsTime } from '../src/parse.js';
+import { extractDue, parseCommand, parseTaskFallback, extractRecurrence, extractShared, mentionsTime, looksLikeTaskReference } from '../src/parse.js';
 import { ilParts, daysFromToday, makeIL } from '../src/util.js';
 import { similarity } from '../src/util.js';
 
@@ -128,4 +128,43 @@ test('זיהוי אזכור שעה — הבלם על ה-AI', () => {
 test('דמיון בין משימות מזהה כפילות', () => {
   assert.ok(similarity('לשלם ארנונה', 'לשלם את הארנונה') > 0.7);
   assert.ok(similarity('לשלם ארנונה', 'לקנות חלב') < 0.4);
+});
+
+test('פעולה על משימה קיימת בניסוח חופשי — הבאג שדווח מהשטח', () => {
+  const expect = (txt, kind, refs) => {
+    const c = parseCommand(txt);
+    assert.ok(c, `לא זוהה: ${txt}`);
+    assert.equal(c.kind, kind, txt);
+    if (refs) assert.deepEqual(c.refs, refs, txt);
+  };
+  // אלה הפכו קודם למשימות חדשות במקום לסגור את הקיימת
+  expect('סיימתי את משימה 5', 'done', [5]);
+  expect('סיימתי משימה 5', 'done', [5]);
+  expect('משימה 5 בוצעה', 'done', [5]);
+  expect('סיימתי את 5', 'done', [5]);
+  expect('סיימתי את משימות 3 ו-5', 'done', [3, 5]);
+  expect('גמרתי את 7', 'done', [7]);
+  expect('טיפלתי במשימה 4', 'done', [4]);
+  expect('תמחק את משימה 3', 'delete', [3]);
+  expect('מחק את 3', 'delete', [3]);
+  expect('תדחה את משימה 2 למחר', 'snooze', [2]);
+});
+
+test('לא לפרש מספרים תמימים כהפניה למשימה', () => {
+  const notAction = (txt) => {
+    const c = parseCommand(txt);
+    assert.ok(!c || !['done', 'delete', 'snooze'].includes(c.kind), `זוהה בטעות: ${txt} → ${JSON.stringify(c)}`);
+  };
+  notAction('סיימתי לקנות 5 קילו עגבניות');
+  notAction('דחה את הפגישה ל-3 בדצמבר');
+  notAction('לקנות 5 בקבוקי יין');
+  notAction('להתקשר למוסך');
+});
+
+test('הבלם מזהה התייחסות למשימה קיימת', () => {
+  assert.equal(looksLikeTaskReference('סיימתי את משימה 5'), true);
+  assert.equal(looksLikeTaskReference('משימה 5 בוצעה'), true);
+  assert.equal(looksLikeTaskReference('תמחק את זה'), true);
+  assert.equal(looksLikeTaskReference('להתקשר למוסך מחר'), false);
+  assert.equal(looksLikeTaskReference('לקנות חלב'), false);
 });

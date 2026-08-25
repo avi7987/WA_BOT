@@ -284,6 +284,10 @@ export function parseCommand(raw) {
   m = /^(?:סיכום בוקר|שעת בוקר|תעיר אותי)\s+(?:ב-?\s*)?([01]?\d|2[0-3])[:.]([0-5]\d)$/.exec(t);
   if (m) return { kind: 'digest_time', time: `${String(+m[1]).padStart(2, '0')}:${m[2]}` };
 
+  // אחרון — פעולה על משימה קיימת בניסוח חופשי ("סיימתי את משימה 5")
+  const vr = parseVerbRef(t);
+  if (vr) return vr;
+
   return null;
 }
 
@@ -306,6 +310,65 @@ function parseListIntent(t) {
   if (/משותפ|ביחד|שנינו/.test(t)) return { kind: 'list', filter: 'shared' };
   if (/הכל|כל המשימות|מלאה/.test(t)) return { kind: 'list', filter: 'all' };
   return { kind: 'list', filter: 'digest' };
+}
+
+// ── פעולה על משימה קיימת, בניסוח חופשי ──────────────────────────────
+//  "סיימתי את משימה 5" · "תמחק את 3" · "תדחה את משימה 2 למחר"
+//  הניסוחים האלה נפוצים מדי מכדי להיות תלויים ב-AI, וטעות בהם
+//  (יצירת משימה חדשה במקום סגירת קיימת) היא הרסנית.
+const VERBS = [
+  ['done', w('סיימתי|סיימנו|בוצע|בוצעו|בוצעה|עשיתי|גמרתי|טיפלתי|סגרתי|ביצעתי|הושלמה|הושלם|השלמתי|כבר עשיתי|כבר טיפלתי')],
+  ['delete', w('מחק|תמחק|למחוק|הסר|תסיר|הורד|תוריד|בטל את|תבטל את')],
+  ['snooze', w('דחה|דחי|תדחה|לדחות|העבר|תעביר|תזיז|הזז|שנה תאריך')],
+];
+
+const REF_MARKER = /(משימ(?:ה|ות)|מספר|מס['׳]?)\s*(\d{1,3})/;
+
+function parseVerbRef(t) {
+  let verb = null, verbEnd = -1;
+  for (const [kind, re] of VERBS) {
+    const m = re.exec(t);
+    if (m) { verb = kind; verbEnd = m.index + m[0].length; break; }
+  }
+  if (!verb) return null;
+
+  const rest = t.slice(verbEnd);
+  // הפועל יכול לבוא גם אחרי ההפניה ("משימה 5 בוצעה") — אז מחפשים בכל הטקסט
+  const marked = REF_MARKER.exec(rest) || REF_MARKER.exec(t);
+
+  let refs, tail;
+  if (marked) {
+    refs = [parseInt(marked[2], 10)];
+    tail = rest.slice(marked.index + marked[0].length);
+    // "סיימתי את משימות 3 ו-5"
+    const more = tail.match(/^\s*(?:,|ו-?|ואת)\s*(\d{1,3})/);
+    if (more) { refs.push(parseInt(more[1], 10)); tail = tail.slice(more[0].length); }
+  } else {
+    // בלי המילה "משימה" — דורשים שהמספר יופיע מיד אחרי הפועל,
+    // ושלא יבוא אחריו טקסט נוסף. אחרת "סיימתי לקנות 5 קילו
+    // עגבניות" היה נקרא בטעות כסגירת משימה 5.
+    const near = /^(?:\s*(?:את|ה)?\s*)(\d{1,3})((?:\s*(?:,|ו-?)\s*\d{1,3})*)\s*(.*)$/.exec(rest);
+    if (!near) return null;
+    tail = near[3] || '';
+    if (verb !== 'snooze' && tail.trim()) return null;   // יש טקסט אחרי המספר — כנראה לא הפניה
+    refs = [parseInt(near[1], 10), ...(near[2].match(/\d{1,3}/g) || []).map(Number)];
+  }
+
+  refs = refs.filter((n) => n > 0 && n < 1000);
+  if (!refs.length) return null;
+
+  if (verb === 'snooze') return { kind: 'snooze', refs, when: (tail || '').trim() || 'מחר' };
+  return { kind: verb === 'done' ? 'done' : 'delete', refs };
+}
+
+/**
+ * האם הטקסט מתייחס למשימה קיימת? משמש כבלם: כשה-AI לא זמין,
+ * עדיף לומר "לא הבנתי" מאשר ליצור משימה בשם "סיימתי את משימה 5".
+ */
+export function looksLikeTaskReference(text) {
+  const t = String(text || '').trim();
+  if (REF_MARKER.test(t)) return true;
+  return VERBS.some(([, re]) => re.test(t));
 }
 
 function numbers(s) {

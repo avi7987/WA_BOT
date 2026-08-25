@@ -100,7 +100,13 @@ RULES
    - CRITICAL — "body" must be the user's OWN words. Never rewrite, polish, translate, expand or add greetings, signatures or emoji they did not say. The only change allowed is turning reported speech into direct speech ("תגיד לו שאני פנוי" → "אני פנוי"), keeping their exact register and wording.
    - "send_at" is when to ASK the user for approval — default null (the task's own due time is used by the app).
    - Never invent a phone number. Put the name in "to_name" and leave "to_phone" null unless the user dictated actual digits.
-9. If the user reports finishing something ("סיימתי עם הארנונה", "שילמתי"), emit "complete" and match it to the closest task by meaning — use its number.
+9. EXISTING vs NEW — the single most damaging mistake you can make is turning a comment ABOUT an existing task into a NEW task. Before emitting "add", ask: is the user describing something they still need to do, or reacting to something already on the list?
+   - "סיימתי את משימה 5" / "משימה 5 בוצעה" / "5 בוצע" → {"type":"complete","ref":5}. The digit is the LIST NUMBER shown above, never part of a title.
+   - "סיימתי עם הארנונה" / "שילמתי" / "טיפלתי בזה" → "complete", matched to the closest task by meaning.
+   - "תמחק את משימה 3" / "בטל את 3" → {"type":"delete","ref":3}
+   - "תדחה את משימה 2 למחר" → {"type":"snooze","ref":2,...}
+   - Past-tense verbs (סיימתי, עשיתי, גמרתי, טיפלתי, שילמתי, סגרתי) almost never introduce a new task. Never emit "add" for them.
+   - Any message containing the word "משימה" followed by a number refers to that numbered task. Never create a task whose title contains "משימה N".
 10. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
 11. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
 12. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.

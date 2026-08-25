@@ -12,7 +12,7 @@ import * as T from './tasks.js';
 import * as R from './render.js';
 import * as llm from './llm.js';
 import * as OB from './outbound.js';
-import { parseCommand, parseTaskFallback, extractDue, mentionsTime } from './parse.js';
+import { parseCommand, parseTaskFallback, extractDue, mentionsTime, looksLikeTaskReference } from './parse.js';
 import { rtl as rtlLine } from './util.js';
 
 const PENDING_TTL_MS = 15 * 60e3;
@@ -91,6 +91,21 @@ async function route(user, text, deps) {
   if (parsed?.actions?.length) return execActions(user, parsed, text, deps);
 
   // ── 4. גיבוי מקומי ──
+  // בלם קריטי: אם הטקסט מתייחס למשימה קיימת ("סיימתי את משימה 5"),
+  // אסור ליצור ממנו משימה חדשה. יצירה שקטה של זבל גרועה בהרבה
+  // מלהודות שלא הבנו — במיוחד כשה-AI לא היה זמין לרגע.
+  if (looksLikeTaskReference(text)) {
+    console.warn(`⚠️  לא זוהתה פעולה על משימה קיימת: ${JSON.stringify(text.slice(0, 80))}`);
+    return [
+      'לא הצלחתי להבין על איזו משימה אתה מדבר — ולא רציתי ליצור משימה חדשה בטעות.',
+      '',
+      'אפשר לנסות:',
+      '• _"סיימתי את משימה 5"_ או פשוט _5_',
+      '• _"מחק 3"_ · _"דחה 2 למחר"_',
+      '• _"רשימה"_ כדי לראות את המספרים העדכניים',
+    ].join('\n');
+  }
+
   const spec = parseTaskFallback(text, new Date(), {
     ownerName: user.name,
     partnerName: partner?.name || null,
