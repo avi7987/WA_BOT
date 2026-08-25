@@ -90,3 +90,29 @@ test('זימון לא מופיע ברשימת המשימות', async () => {
   const tasks = await db.openTasksFor(owner);
   assert.equal(tasks.some((t) => /רו״ח/.test(t.title)), false);
 });
+
+// ── זיהוי מקומי, בלי AI — הבאג שהתגלה כשג'מיני נפל ב-timeout ──────
+test('"תייצר זימון" מזוהה מקומית ולא הופך למשימה', async () => {
+  const before = (await db.openTasksFor(owner)).length;
+  const reply = await handleMessage(owner, 'תייצר זימון לפגישה עם רואה חשבון מחר ב-14:00, תוסיף גם את איה', deps);
+
+  assert.match(reply, /ליומן/, 'הוחזר זימון');
+  assert.match(reply, /calendar\.google\.com/);
+  assert.match(reply, /ayaokshus/, 'איה צורפה כמוזמנת');
+  assert.equal((await db.openTasksFor(owner)).length, before, 'לא נוצרה משימה');
+
+  const events = await db.liveCalendarEvents(owner.id);
+  const ev = events.find((e) => /רואה חשבון/.test(e.title));
+  assert.ok(ev, 'האירוע נשמר');
+  assert.equal(ev.all_day, false, 'נאמרה שעה — לא יום שלם');
+});
+
+test('זימון בלי שעה נשמר כיום שלם טנטטיבי', async () => {
+  const reply = await handleMessage(owner, 'זימון לביקור אצל ההורים ביום שישי', deps);
+  assert.match(reply, /ליומן/);
+  const events = await db.liveCalendarEvents(owner.id);
+  const ev = events.find((e) => /ההורים/.test(e.title));
+  assert.ok(ev);
+  assert.equal(ev.all_day, true, 'בלי שעה — יום שלם');
+  assert.equal((ev.guests || []).length, 0, 'לא צורפו מוזמנים שלא נתבקשו');
+});

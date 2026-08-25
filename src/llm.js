@@ -195,7 +195,7 @@ async function geminiText(system, user) {
     const res = await fetch(`${GEMINI_BASE}/${GEMINI_MODEL}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY },
-      signal: AbortSignal.timeout(35000),
+      signal: AbortSignal.timeout(55000),
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: user }] }],
@@ -239,7 +239,7 @@ async function groqText(system, user) {
   const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${GROQ_KEY}` },
-    signal: AbortSignal.timeout(35000),
+    signal: AbortSignal.timeout(55000),
     body: JSON.stringify({
       model: GROQ_MODEL,
       temperature: 0.1,

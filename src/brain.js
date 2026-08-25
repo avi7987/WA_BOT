@@ -231,6 +231,12 @@ async function handleCommand(user, cmd, deps) {
     }
 
     // ── זימונים ביומן ──
+    case 'event_create': {
+      const parsed = await parseEventLocally(cmd.text);
+      if (!parsed.start) return 'מתי לקבוע את הזימון? (למשל "מחר ב-14:00" או "ביום שישי")';
+      return createEvent(user, parsed, deps);
+    }
+
     case 'event_list':
       return R.renderEvents(await db.liveCalendarEvents(user.id, 10));
 
@@ -757,6 +763,41 @@ async function createEvent(user, spec, deps) {
     const ev = await db.createCalendarEvent({ ...row, status: 'link_only', last_error: String(e.message || e).slice(0, 300) });
     return `${R.renderEventLink(ev, CAL.eventLink(payload))}\n\n_(החיבור האוטומטי נכשל: ${e.message})_`;
   }
+}
+
+/**
+ * מפרק בקשת זימון בלי AI: כותרת, מועד, ואורחים לפי הכינויים
+ * השמורים בהגדרות. בלי שעה מפורשת — יום שלם טנטטיבי.
+ */
+async function parseEventLocally(text) {
+  let t = String(text || '').trim();
+
+  // אורחים: כל כינוי מוכר שמופיע בטקסט ("תוסיף גם את איה")
+  const aliases = (await db.getSetting('calendar_guest_aliases', {})) || {};
+  const guests = [];
+  for (const name of Object.keys(aliases)) {
+    const re = new RegExp(`(?:תוסיף|תזמן|הוסף|עם|וגם|גם)\\s+(?:גם\\s+)?(?:את\\s+)?${name}`);
+    if (re.test(t)) {
+      guests.push(name);
+      t = t.replace(re, ' ');
+    }
+  }
+
+  const timed = mentionsTime(t);
+  const due = extractDue(t);
+  let title = (due.cleaned || t)
+    .replace(/^(?:פגישה\s+)?ל(?=[א-ת])/, '')      // "לפגישה" → "פגישה"
+    .replace(/[\s,.\-–]+$/, '')
+    .trim();
+  if (!title) title = 'זימון';
+
+  return {
+    title,
+    start: due.due ? due.due.toISOString() : null,
+    end: null,
+    allDay: !timed,
+    guests,
+  };
 }
 
 async function cancelEventByRef(user, ref) {
