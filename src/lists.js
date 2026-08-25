@@ -42,7 +42,9 @@ export async function findList(query) {
       if (s > bestScore) { bestScore = s; best = l; }
     }
   }
-  return bestScore >= 0.6 ? best : null;
+  // סף מחמיר בכוונה: כינוי קצר כמו "קפה" אסור לו לתפוס
+  // "קפה איטליה פלורנטין" ולפתוח רשימה במקום לשמור פריט.
+  return bestScore >= 0.78 ? best : null;
 }
 
 export async function createList(user, name, aliases = [], icon = '📋') {

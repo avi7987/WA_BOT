@@ -71,6 +71,7 @@ Allowed actions:
 {"type":"list_remove","list":"...","ref": <number shown in that list>}
 {"type":"list_create","name":"..."}
 {"type":"capture_idea","body":"the improvement request, cleanly phrased in Hebrew"}
+{"type":"ask_destination","text":"the item, cleanly phrased","list":"best-guess list name or null"}
 {"type":"already_supported","explanation":"one or two Hebrew lines telling the user how to do it today"}
 {"type":"list","filter":"digest"|"today"|"tomorrow"|"week"|"overdue"|"all"|"shared"|"done"|"mine_assigned"|"partner_assigned"}
 {"type":"none"}
@@ -131,6 +132,12 @@ ${ctx.lists?.length ? `   Existing lists: ${ctx.lists.map((l) => `"${l.name}"${l
      • preparing a WhatsApp message to someone, approved before sending
      • voice notes for everything
      • changing the morning digest time ("סיכום בוקר 07:30")
+11b. WHERE DOES IT BELONG — before creating anything, decide between three destinations. Apply this test in order:
+   a) Is it about what the BOT should be able to do? → capture_idea
+   b) Does it name, or clearly belong to, one of the reference lists above? → list_add
+   c) Is it something ${ctx.userName} has to DO — an action, usually an infinitive verb ("לקנות", "להתקשר", "לתאם"), often with a date? → add (task)
+   If after this test you are still not confident — especially for a bare name with no verb and no date, like "קפה איטליה בפלורנטין" — DO NOT GUESS. Emit {"type":"ask_destination","text":"...","list":"<the list it might belong to>"}. Filing something in the wrong place silently is worse than one short question.
+   Be decisive when it IS clear: "לקנות חלב מחר" is obviously a task, "רעיון: תוסיף תמונות" is obviously an idea. Only ask when genuinely torn.
 12. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
 13. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
 14. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.

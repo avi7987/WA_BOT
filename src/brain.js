@@ -13,7 +13,7 @@ import * as R from './render.js';
 import * as llm from './llm.js';
 import * as OB from './outbound.js';
 import * as L from './lists.js';
-import { parseCommand, parseTaskFallback, extractDue, mentionsTime, looksLikeTaskReference } from './parse.js';
+import { parseCommand, parseTaskFallback, extractDue, mentionsTime, looksLikeTaskReference, classifyIntent, mentionedList } from './parse.js';
 import { rtl as rtlLine } from './util.js';
 
 const PENDING_TTL_MS = 15 * 60e3;
@@ -112,6 +112,30 @@ async function route(user, text, deps) {
       '• _"מחק 3"_ · _"דחה 2 למחר"_',
       '• _"רשימה"_ כדי לראות את המספרים העדכניים',
     ].join('\n');
+  }
+
+  // גם בלי AI, לא כל טקסט הוא משימה. רעיון לפיתוח או פריט לרשימה
+  // שנכנסים בטעות כמשימה מזהמים בדיוק את המקום שרצינו לשמור נקי.
+  const lists = await db.getLists();
+  const guess = classifyIntent(text, lists);
+
+  if (guess === 'idea') return saveIdea(user, text, text);
+
+  if (guess === 'list') {
+    const target = mentionedList(text, lists);
+    if (target) return addToList(user, target, splitItemText(text.replace(/^(?:תוסיף|הוסף|תרשום|רשום)\s+ל\S*\s*[:,\-–]?\s*/, '')));
+  }
+
+  if (guess === 'unknown') {
+    // מציעים את הרשימה שהוזכרה כאפשרות, אבל לא מתייקים לשם בשקט
+    const maybe = mentionedList(text, lists);
+    await db.setState(user.id, {
+      pending: {
+        kind: 'destination_choice', text, source_text: text,
+        list_id: maybe?.id || null, expires_at: Date.now() + PENDING_TTL_MS,
+      },
+    });
+    return R.renderDestinationChoice(text, maybe?.name || null);
   }
 
   const spec = parseTaskFallback(text, new Date(), {
@@ -381,6 +405,21 @@ async function execActions(user, parsed, sourceText, deps) {
           outputs.push(await saveIdea(user, a.body, sourceText));
           break;
 
+        case 'ask_destination': {
+          const guess = a.list ? await L.findList(a.list) : null;
+          await db.setState(user.id, {
+            pending: {
+              kind: 'destination_choice',
+              text: a.text || sourceText,
+              source_text: sourceText,
+              list_id: guess?.id || null,
+              expires_at: Date.now() + PENDING_TTL_MS,
+            },
+          });
+          outputs.push(R.renderDestinationChoice(a.text || sourceText, guess?.name || null));
+          break;
+        }
+
         case 'already_supported':
           outputs.push(R.renderAlreadySupported(a.explanation || 'זה כבר נתמך.'));
           break;
@@ -566,6 +605,28 @@ async function handlePending(user, pending, text, cmd, deps) {
       await db.clearPending(user.id);
       const c = list[pick - 1];
       return createMessageFor(user, { ...pending.draft, phone: c.phone, name: c.name }, deps);
+    }
+
+    // ── "לאן זה שייך?" ──
+    case 'destination_choice': {
+      if (cmd?.kind === 'no') { await db.clearPending(user.id); return 'בסדר, לא שמרתי כלום.'; }
+      const hasList = !!pending.list_id;
+      const max = hasList ? 3 : 2;
+      if (!pick || pick < 1 || pick > max) return null;
+      await db.clearPending(user.id);
+
+      if (pick === 1) {
+        const spec = parseTaskFallback(pending.text, new Date(), { ownerName: user.name });
+        spec.source_text = pending.source_text || pending.text;
+        const res = await addOne(user, spec, deps);
+        return res.pendingPrompt || R.renderAdded([res], viewOpts(user, deps));
+      }
+      if (hasList && pick === 2) {
+        const list = (await db.getLists()).find((l) => l.id === pending.list_id);
+        if (!list) return 'לא מצאתי את הרשימה.';
+        return addToList(user, list, splitItemText(pending.text));
+      }
+      return saveIdea(user, pending.text, pending.source_text || pending.text);
     }
 
     case 'reminder_actions': {

@@ -539,6 +539,22 @@ export function renderSentToday(rows) {
   return lines.join('\n');
 }
 
+// ── "לאן זה שייך?" ──────────────────────────────────────────────────
+// מוצג רק כשבאמת לא ברור. תיוק שקט במקום הלא נכון גרוע משאלה קצרה.
+export function renderDestinationChoice(text, listName) {
+  const lines = [
+    rtl(`🤔 *"${text}"*`),
+    rtl('לאן לשייך את זה?'),
+    SEP,
+    rtl('1 · משימה שלי'),
+  ];
+  if (listName) lines.push(rtl(`2 · ${listName}`));
+  lines.push(rtl(`${listName ? 3 : 2} · רעיון לפיתוח הבוט`));
+  lines.push(SEP);
+  lines.push(rtl('_ענה במספר, או "בטל"._'));
+  return lines.join('\n');
+}
+
 // ── תיבת רעיונות ────────────────────────────────────────────────────
 export function renderIdeaSaved(req, count) {
   return [

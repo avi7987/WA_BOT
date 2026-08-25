@@ -5,7 +5,7 @@
 //  היתרון: פקודות יומיומיות ("1", "דחה 2 מחר") עובדות מיידית,
 //  בלי קריאת רשת, וגם אם אין מפתח AI בכלל.
 // =====================================================================
-import { ilParts, makeIL, addDays, addMonths, ilStartOfDay } from './util.js';
+import { ilParts, makeIL, addDays, addMonths, ilStartOfDay, normalizeText } from './util.js';
 
 const HEB_DAY_NAMES = {
   'ראשון': 0, 'א': 0, 'שני': 1, 'ב': 1, 'שלישי': 2, 'ג': 2, 'רביעי': 3, 'ד': 3,
@@ -386,6 +386,58 @@ function parseVerbRef(t) {
 
   if (verb === 'snooze') return { kind: 'snooze', refs, when: (tail || '').trim() || 'מחר' };
   return { kind: verb === 'done' ? 'done' : 'delete', refs };
+}
+
+// ── לאן זה שייך: משימה, רשימת ייחוס, או רעיון לפיתוח ────────────────
+//  משמש כשה-AI לא זמין. הכלל: אם לא ברור — לא מנחשים.
+const IDEA_HINTS = [
+  w('רעיון|בקשה|הצעה|באג|פיצ.ר'),
+  /תוסיף אפשרות|תדע ל|שתדע|היה נחמד אם|יהיה נחמד אם|למה אתה לא|אתה לא יודע|לא עובד לי|תוכל ל|שתוכל ל/,
+  /(הבוט|אתה)\s+(צריך|יכול|יודע|אמור)/,
+];
+
+const TASK_HINTS = [
+  /^ל[א-ת]{2,}/,                       // שם פועל בתחילת המשפט: "לקנות", "להתקשר"
+  w('תזכיר לי|תזכירי לי|צריך|צריכה|אני חייב|לזכור|תזכורת|דדליין|עד יום|עד ה'),
+];
+
+const ADD_TO_LIST = /^(?:תוסיף|הוסף|תרשום|רשום)\s+ל/;
+
+/** איזו רשימה מוזכרת בטקסט, אם בכלל */
+export function mentionedList(text, lists = []) {
+  const norm = normalizeText(text);
+  for (const l of lists) {
+    for (const name of [l.name, ...(l.aliases || [])]) {
+      const nn = normalizeText(name);
+      if (nn.length >= 3 && norm.includes(nn)) return l;
+    }
+  }
+  return null;
+}
+
+/**
+ * מחזיר 'idea' | 'list' | 'task' | 'unknown'.
+ *
+ * הערה על התכנון: ההיוריסטיקות כאן חלשות בכוונה. הן רצות רק כשה-AI
+ * לא זמין, ובמקרה כזה עדיף להחזיר 'unknown' ולשאול מאשר לתייק לא נכון.
+ * הסדר חשוב — סימנים חזקים (תאריך, שיתוף) גוברים על אזכור שם רשימה,
+ * אחרת "להזמין מסעדה ליום שישי" היה נחשב פריט ברשימת המסעדות.
+ */
+export function classifyIntent(text, lists = []) {
+  const t = String(text || '').trim();
+  if (!t) return 'unknown';
+
+  if (IDEA_HINTS.some((re) => re.test(t))) return 'idea';
+  if (ADD_TO_LIST.test(t) && mentionedList(t, lists)) return 'list';
+
+  // סימנים חזקים למשימה
+  if (extractDue(t).due) return 'task';
+  if (SHARED_WORDS.test(t)) return 'task';
+  if (TASK_HINTS.some((re) => re.test(t))) return 'task';
+
+  // אזכור סתמי של שם רשימה אינו מספיק — "קפה איטליה פלורנטין" מזכיר
+  // "קפה" אבל זה לא בהכרח בקשה לפתוח את הרשימה. עדיף לשאול.
+  return 'unknown';
 }
 
 /**
