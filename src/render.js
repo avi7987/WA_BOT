@@ -357,6 +357,12 @@ export function renderHelp(opts = {}) {
     rtl('משימה עם הודעה ממתינה מסומנת ב-📤.'),
     rtl('_"הודעות"_ · _"הודעה 3"_ · _"בטל הודעה 3"_ · _"נשלחו היום"_'),
     '',
+    rtl('*רשימות ייחוס* — דברים ששווה לזכור, בלי תאריך ובלי הצקה:'),
+    rtl('_"תוסיף למסעדות: קפה איטליה, פלורנטין תל אביב, בשרי"_'),
+    rtl('_"מסעדות"_ · _"מסעדות בתל אביב"_ · _"איפה לאכול בצפון"_'),
+    rtl('_"תמחק מהמסעדות 2"_ · _"תפתח רשימה של ספרים"_ · _"רשימות"_'),
+    rtl('הן *לא* מופיעות בסיכום הבוקר ולא ברשימת המשימות — רק כשתבקש.'),
+    '',
     rtl('*פקודות שימושיות:*'),
     rtl('• _רשימה_ — כל מה שפתוח'),
     rtl('• _היום_ / _מחר_ / _השבוע_ / _באיחור_'),
@@ -526,6 +532,61 @@ export function renderSentToday(rows) {
     lines.push(rtl(`  "${r.body.slice(0, 60)}${r.body.length > 60 ? '…' : ''}"`));
   }
   return lines.join('\n');
+}
+
+// ── רשימות ייחוס ────────────────────────────────────────────────────
+export function renderListItems(list, items, filter = {}) {
+  const scope = [filter.area && `· ${filter.area}`, filter.tag && `· ${filter.tag}`].filter(Boolean).join(' ');
+  const lines = [rtl(`${list.icon || '📋'} *${list.name}*${scope ? ' ' + scope : ''} (${items.length})`), SEP];
+
+  if (!items.length) {
+    lines.push(rtl(filter.area || filter.tag
+      ? 'אין כאן משהו שמתאים לסינון הזה.'
+      : 'הרשימה ריקה עדיין.'));
+    lines.push(SEP);
+    lines.push(rtl(`_להוסיף: "תוסיף ל${list.name}: שם המקום, מיקום"_`));
+    return lines.join('\n');
+  }
+
+  items.forEach((it, i) => {
+    const where = it.location_text || it.area;
+    lines.push(rtl(`${i + 1}. *${it.title}*${where ? ` — ${where}` : ''}`));
+    const extras = [(it.tags || []).join(' · '), it.note].filter(Boolean).join(' | ');
+    if (extras) lines.push(rtl(`   _${extras}_`));
+  });
+
+  lines.push(SEP);
+  lines.push(rtl(RULE));
+  lines.push(rtl(`_"תוסיף ל${list.name}: ..." · "תמחק מ${list.name} 2"_`));
+  return lines.join('\n');
+}
+
+export function renderListsOverview(lists, counts) {
+  if (!lists.length) return rtl('אין עדיין רשימות. אפשר לפתוח אחת: _"תפתח רשימה של ספרים"_.');
+  const lines = [rtl('📚 *הרשימות שלך*'), SEP];
+  for (const l of lists) {
+    lines.push(rtl(`${l.icon || '📋'} *${l.name}* — ${counts.get(l.id) || 0} פריטים`));
+  }
+  lines.push(SEP);
+  lines.push(rtl('_כדי לפתוח אחת, פשוט תכתוב את שמה._'));
+  lines.push(rtl('_הרשימות האלה לא מופיעות בסיכום הבוקר ולא ברשימת המשימות._'));
+  return lines.join('\n');
+}
+
+export function renderItemAdded(list, item) {
+  const lines = [rtl(`${list.icon || '📋'} נוסף ל*${list.name}*: *${item.title}*`)];
+  if (item.location_text || item.area) lines.push(rtl(`📍 ${item.location_text || item.area}`));
+  if ((item.tags || []).length) lines.push(rtl(`🏷️ ${item.tags.join(' · ')}`));
+  return lines.join('\n');
+}
+
+export function renderItemRemoved(list, item) {
+  return rtl(`🗑️ "${item.title}" הוסר מ${list.name}.`);
+}
+
+export function renderItemDuplicate(list, existing) {
+  const where = existing.location_text || existing.area;
+  return rtl(`כבר יש ב${list.name}: *${existing.title}*${where ? ` — ${where}` : ''}`);
 }
 
 // ── שאלת הבהרה ──────────────────────────────────────────────────────

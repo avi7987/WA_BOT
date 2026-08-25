@@ -187,6 +187,50 @@ export async function sentToday() {
   return data || [];
 }
 
+// ── רשימות ייחוס (מסעדות, ספרים...) ─────────────────────────────────
+export async function getLists() {
+  const { data } = await supabase.from('pa_lists').select('*').order('created_at');
+  return data || [];
+}
+
+export async function createList(row) {
+  const { data, error } = await supabase.from('pa_lists').insert(row).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listItems(listId) {
+  const { data } = await supabase.from('pa_list_items')
+    .select('*').eq('list_id', listId).order('created_at');
+  return data || [];
+}
+
+export async function createListItem(row) {
+  const { data, error } = await supabase.from('pa_list_items').insert(row).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteListItem(id) {
+  const { data } = await supabase.from('pa_list_items').delete().eq('id', id).select().maybeSingle();
+  return data || null;
+}
+
+// מספרי קיצור לפריטי רשימה — מרחב נפרד ממספרי המשימות
+export async function setItemRefs(userId, listId, itemIds) {
+  await supabase.from('pa_item_refs').delete().eq('user_id', userId);
+  if (!itemIds.length) return;
+  await supabase.from('pa_item_refs').insert(
+    itemIds.map((item_id, i) => ({ user_id: userId, n: i + 1, item_id, list_id: listId })),
+  );
+}
+
+export async function resolveItemRef(userId, n) {
+  const { data } = await supabase.from('pa_item_refs')
+    .select('item_id,list_id').eq('user_id', userId).eq('n', n).maybeSingle();
+  return data || null;
+}
+
 // ── מספרי קיצור (הרשימה שהוצגה לאחרונה) ─────────────────────────────
 export async function setRefs(userId, taskIds) {
   await supabase.from('pa_refs').delete().eq('user_id', userId);

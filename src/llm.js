@@ -66,6 +66,10 @@ Allowed actions:
 {"type":"note","ref": <number|title>, "text":"the note itself, in Hebrew"}
 {"type":"show_notes","ref": <number|title>}
 {"type":"compose_message","ref": <number|title|"new">, "to_name":"contact name as the user said it", "to_phone":"digits or null", "body":"the exact message text", "send_at":"ISO-8601 or null"}
+{"type":"list_add","list":"name of the reference list","title":"the place/book/movie","location":"as the user said it, or null","area":"normalized city or region, or null","tags":["..."],"note":"...|null"}
+{"type":"list_show","list":"name of the reference list","area":"city/region or null","tag":"or null"}
+{"type":"list_remove","list":"...","ref": <number shown in that list>}
+{"type":"list_create","name":"..."}
 {"type":"list","filter":"digest"|"today"|"tomorrow"|"week"|"overdue"|"all"|"shared"|"done"|"mine_assigned"|"partner_assigned"}
 {"type":"none"}
 
@@ -107,10 +111,18 @@ RULES
    - "תדחה את משימה 2 למחר" → {"type":"snooze","ref":2,...}
    - Past-tense verbs (סיימתי, עשיתי, גמרתי, טיפלתי, שילמתי, סגרתי) almost never introduce a new task. Never emit "add" for them.
    - Any message containing the word "משימה" followed by a number refers to that numbered task. Never create a task whose title contains "משימה N".
-10. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
-11. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
-12. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.
-13. Never output explanations, markdown, or text outside the JSON object.`;
+10. REFERENCE LISTS — separate from tasks. These are things worth remembering, with no due date and no completion: restaurants to try, books to read, gift ideas.
+${ctx.lists?.length ? `   Existing lists: ${ctx.lists.map((l) => `"${l.name}"${l.aliases?.length ? ` (also: ${l.aliases.slice(0, 4).join(', ')})` : ''}`).join(' · ')}` : '   (no lists exist yet)'}
+   - "תוסיף למסעדות את קפה איטליה בפלורנטין, בשרי" → list_add. NEVER an "add" task.
+   - "איפה לאכול בתל אביב?" / "מה יש לי במסעדות בצפון" → list_show with area.
+   - "מסעדות בשריות" → list_show with tag.
+   - Put the location exactly as the user said it in "location", and a clean city or region name in "area" (e.g. "פלורנטין תל אביב" → area "תל אביב"; "איפשהו בצפון" → area "צפון").
+   - Short descriptors the user throws in ("בשרי", "יקר", "טוב לילדים", "סושי") go in "tags".
+   - A reference item NEVER becomes a task, and a task never goes into a list. If the user says "תזכיר לי להזמין מקום במסעדה X" that IS a task; "תוסיף את מסעדה X לרשימה" is a list item.
+12. If the user just asks what they have ("מה יש לי היום"), emit a "list" action only.
+13. If nothing actionable was said, emit {"type":"none"} and put a one-line Hebrew answer in "reply".
+14. "reply" should stay empty (null) whenever an action already speaks for itself — the app writes its own confirmations.
+15. Never output explanations, markdown, or text outside the JSON object.`;
 }
 
 // ── פענוח הודעה ─────────────────────────────────────────────────────

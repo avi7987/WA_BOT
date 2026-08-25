@@ -12,6 +12,7 @@ import * as T from './tasks.js';
 import * as R from './render.js';
 import * as llm from './llm.js';
 import * as OB from './outbound.js';
+import * as L from './lists.js';
 import { parseCommand, parseTaskFallback, extractDue, mentionsTime, looksLikeTaskReference } from './parse.js';
 import { rtl as rtlLine } from './util.js';
 
@@ -77,6 +78,12 @@ async function route(user, text, deps) {
     if (out) return out;
   }
 
+  // ── 2.5 רשימות ייחוס ──
+  // שם רשימה לבדו ("מסעדות") או עם סינון ("מסעדות בתל אביב") פותח אותה.
+  // לפני ה-AI, כי זה מיידי ולא עולה קריאת רשת.
+  const listHit = await matchListQuery(text);
+  if (listHit) return showList(user, listHit.list, listHit.filter);
+
   // ── 3. הבנה חופשית ──
   const ordered = await orderedTasks(user);
   const partner = deps.partnerOf(user);
@@ -86,6 +93,7 @@ async function route(user, text, deps) {
     userName: user.name,
     partnerName: partner?.name || null,
     defaultShared: !!user.default_shared,
+    lists: await db.getLists(),
   });
 
   if (parsed?.actions?.length) return execActions(user, parsed, text, deps);
@@ -197,6 +205,36 @@ async function handleCommand(user, cmd, deps) {
       return applyVerb(user, 'note_show', {}, ids, deps);
     }
 
+    // ── רשימות ייחוס ──
+    case 'lists_overview': {
+      const lists = await db.getLists();
+      const counts = new Map();
+      for (const l of lists) counts.set(l.id, (await db.listItems(l.id)).length);
+      return R.renderListsOverview(lists, counts);
+    }
+
+    case 'list_create': {
+      const { list, existed } = await L.createList(user, cmd.name);
+      return existed
+        ? `כבר יש רשימה כזו: ${list.icon || '📋'} *${list.name}*`
+        : `${list.icon || '📋'} נפתחה הרשימה *${list.name}*.\n_להוסיף: "תוסיף ל${list.name}: ..."_`;
+    }
+
+    case 'list_add': {
+      const list = await L.findList(cmd.listQuery);
+      if (!list) return `לא מצאתי רשימה בשם "${cmd.listQuery}". שלח "רשימות" כדי לראות מה קיים.`;
+      return addToList(user, list, splitItemText(cmd.text));
+    }
+
+    case 'list_remove': {
+      const list = await L.findList(cmd.listQuery);
+      if (!list) return `לא מצאתי רשימה בשם "${cmd.listQuery}".`;
+      const ref = await db.resolveItemRef(user.id, cmd.ref);
+      if (!ref) return `לא מצאתי פריט מספר ${cmd.ref}. תפתח את ${list.name} כדי לראות מספרים עדכניים.`;
+      const removed = await L.removeItem(ref.item_id);
+      return removed ? R.renderItemRemoved(list, removed) : 'לא מצאתי את הפריט.';
+    }
+
     // ── הודעות יוצאות ──
     case 'msg_list': {
       const rows = await db.messagesAwaiting(user.id);
@@ -291,6 +329,37 @@ async function execActions(user, parsed, sourceText, deps) {
           addResults.push(res);
           if (res.task?.shared) await notifyShared(user, [res.task], 'add', deps);
           if (res.task?.assigned_to) await notifyAssignment(user, [res.task], deps);
+          break;
+        }
+        case 'list_add': {
+          const list = await L.findList(a.list || '');
+          if (!list) { outputs.push(`לא מצאתי רשימה בשם "${a.list}". שלח "רשימות" כדי לראות מה קיים.`); break; }
+          outputs.push(await addToList(user, list, {
+            title: a.title, location: a.location || null, area: a.area || null,
+            tags: a.tags || [], note: a.note || null,
+          }));
+          break;
+        }
+        case 'list_show': {
+          const list = await L.findList(a.list || '');
+          if (!list) { outputs.push(`לא מצאתי רשימה בשם "${a.list}".`); break; }
+          outputs.push(await showList(user, list, { area: a.area || null, tag: a.tag || null }));
+          break;
+        }
+        case 'list_remove': {
+          const list = await L.findList(a.list || '');
+          if (!list) { outputs.push('לא מצאתי את הרשימה.'); break; }
+          const ref = await db.resolveItemRef(user.id, a.ref);
+          if (!ref) { outputs.push('לא מצאתי את הפריט. תפתח את הרשימה כדי לראות מספרים עדכניים.'); break; }
+          const removed = await L.removeItem(ref.item_id);
+          outputs.push(removed ? R.renderItemRemoved(list, removed) : 'לא מצאתי את הפריט.');
+          break;
+        }
+        case 'list_create': {
+          const { list, existed } = await L.createList(user, a.name);
+          outputs.push(existed
+            ? `כבר יש רשימה כזו: ${list.icon || '📋'} *${list.name}*`
+            : `${list.icon || '📋'} נפתחה הרשימה *${list.name}*.`);
           break;
         }
         case 'compose_message': {
@@ -521,6 +590,52 @@ async function applyVerb(user, verb, payload, ids, deps) {
     default:
       return 'לא הבנתי מה לעשות.';
   }
+}
+
+// ── רשימות ייחוס ────────────────────────────────────────────────────
+/**
+ * מזהה בקשה לפתוח רשימה מתוך טקסט חופשי:
+ *   "מסעדות" · "מסעדות בתל אביב" · "מסעדות בשריות"
+ * מחזיר null אם זו לא בקשה כזו (ואז ההודעה ממשיכה במסלול הרגיל).
+ */
+async function matchListQuery(text) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 60) return null;
+
+  // קודם הפיצול "<שם רשימה> ב<אזור>" — אחרת "מסעדות בתל אביב" נתפס
+  // כשם הרשימה עצמה (הוא מכיל אותו) והסינון לא מופעל לעולם.
+  const m = /^(.{2,25}?)\s+ב(.{2,30})$/.exec(t);
+  if (m) {
+    const list = await L.findList(m[1]);
+    if (list) return { list, filter: { area: m[2].trim() } };
+  }
+
+  const direct = await L.findList(t);
+  if (direct) return { list: direct, filter: {} };
+  return null;
+}
+
+async function showList(user, list, filter = {}) {
+  const items = await L.search(list, filter);
+  await db.setItemRefs(user.id, list.id, items.map((i) => i.id));
+  return R.renderListItems(list, items, filter);
+}
+
+// "קפה איטליה, פלורנטין תל אביב, בשרי" → כותרת + מיקום + תגיות
+function splitItemText(text) {
+  const parts = String(text || '').split(/\s*[,،]\s*/).map((s) => s.trim()).filter(Boolean);
+  return {
+    title: parts[0] || '',
+    location: parts[1] || null,
+    tags: parts.slice(2),
+  };
+}
+
+async function addToList(user, list, spec) {
+  const res = await L.addItem(user, list, spec);
+  if (res.error) return res.error;
+  if (res.duplicate) return R.renderItemDuplicate(list, res.duplicate);
+  return R.renderItemAdded(list, res.item);
 }
 
 // ── הודעות יוצאות: יצירה, כולל זיהוי נמען ───────────────────────────
