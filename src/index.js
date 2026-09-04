@@ -205,17 +205,38 @@ async function initWithRetry(session, label, attempts = 5) {
 // להרים אותו נקי (restart: unless-stopped) מאשר להישאר חי-אך-מושבת.
 function startWatchdog(graceMs = 12 * 60_000) {
   const since = new Map();
-  setInterval(() => {
+  const revived = new Set();
+
+  setInterval(async () => {
     for (const [key, s] of sessions) {
       // 'qr' = ממתין שאדם יסרוק. זו לא תקיעה, וזה יכול להימשך שעות —
       // אסור שהשומר יפיל את השירות באמצע ויבטל את הקוד שהוצג.
-      if (s.state === 'ready' || s.state === 'qr') { since.delete(key); continue; }
+      if (s.state === 'ready' || s.state === 'qr') { since.delete(key); revived.delete(key); continue; }
       if (!since.has(key)) since.set(key, Date.now());
       const stuckFor = Date.now() - since.get(key);
-      if (stuckFor > graceMs) {
-        console.error(`⛔ ${s.label}: תקוע במצב "${s.state}" כבר ${Math.round(stuckFor / 60000)} דקות — מאתחל את השירות.`);
-        process.exit(1);
+      if (stuckFor <= graceMs) continue;
+
+      // ניסיון ראשון: להחיות את הסשן לבד, בלי להרוג את התהליך.
+      // הריגה קוטעת את כרומיום באמצע כתיבה ופוגמת את קובצי החיבור —
+      // וזה מה שגורם לדרישת QR מחדש. עדיף לנסות בעדינות קודם.
+      if (!revived.has(key)) {
+        revived.add(key);
+        since.set(key, Date.now());
+        console.error(`⚠️  ${s.label}: תקוע ${Math.round(stuckFor / 60000)} דקות — מנסה להחיות את הסשן.`);
+        try {
+          await Promise.race([s.client.destroy(), new Promise((r) => setTimeout(r, 15_000))]);
+          await s.client.initialize();
+          console.error(`   ✓ ${s.label}: אותחל מחדש`);
+        } catch (e) {
+          console.error(`   ✗ ${s.label}: ההחייאה נכשלה — ${e.message}`);
+        }
+        continue;
       }
+
+      // ההחייאה לא עזרה — מפילים, אבל בסגירה מסודרת
+      console.error(`⛔ ${s.label}: עדיין תקוע אחרי החייאה — מאתחל את השירות.`);
+      await shutdown(`${s.label} תקוע`, 1);
+      return;
     }
   }, 60_000);
 }
@@ -262,11 +283,35 @@ for (const stream of [process.stdout, process.stderr]) {
   stream.on('error', (e) => { if (e?.code !== 'EPIPE') { /* מתעלמים בשקט */ } });
 }
 
+/**
+ * סגירה מסודרת של הדפדפנים לפני יציאה.
+ *
+ * זה לא ליטוש: הריגה של כרומיום באמצע כתיבה משאירה את קובצי
+ * החיבור לוואטסאפ חצי-כתובים, ואז נדרשת סריקת QR מחדש. בדיוק כך
+ * אבד החיבור ב-3.9. סגירה מסודרת מאפשרת לכרומיום לסיים לכתוב.
+ */
+let shuttingDown = false;
+async function shutdown(reason, code = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.error(`⛔ סוגר (${reason}) — סוגר דפדפנים בצורה מסודרת...`);
+  await Promise.all([...sessions.values()].map(async (s) => {
+    try {
+      await Promise.race([
+        s.client.destroy(),
+        new Promise((r) => setTimeout(r, 15_000)),   // לא נתקעים לנצח על סגירה
+      ]);
+      console.error(`   ✓ ${s.label} נסגר`);
+    } catch (e) { console.error(`   ✗ ${s.label}: ${e.message}`); }
+  }));
+  process.exit(code);
+}
+
 process.on('unhandledRejection', (e) => console.error('unhandledRejection:', e));
 process.on('uncaughtException', (e) => console.error('uncaughtException:', (e && e.stack) || e));
 process.on('exit', (code) => console.error(`⛔ התהליך מסתיים (קוד ${code})`));
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']) {
-  process.on(sig, () => { console.error(`⛔ התקבל ${sig}`); process.exit(0); });
+  process.on(sig, () => shutdown(sig, 0));
 }
 
 boot().catch((e) => {
