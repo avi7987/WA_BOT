@@ -52,6 +52,10 @@ async function maybeDigest(user, deps, when) {
   const now = ilMinutesNow();
   if (now < target || now > target + DIGEST_GRACE_MIN) return;
 
+  // אם הסשן לא מחובר — לא "מבזבזים" את הסיכום של היום. מנסים שוב
+  // בסבב הבא, וכך אחרי חיבור מחדש הסיכום עדיין יגיע.
+  if (!deps.isReady || !deps.isReady(user)) return;
+
   const kind = when === 'morning' ? 'digest_morning' : 'digest_evening';
   const first = await db.claimDaily(user.id, kind);
   if (!first) return;                       // כבר נשלח היום
@@ -68,8 +72,16 @@ async function maybeDigest(user, deps, when) {
     evening: when === 'evening',
   });
   await db.setRefs(user.id, view.order);
-  await deps.sendTo(user, view.text);
-  console.log(`📤 סיכום ${when === 'morning' ? 'בוקר' : 'ערב'} נשלח ל-${user.name}`);
+  try {
+    const sent = await deps.sendTo(user, view.text);
+    if (sent === false) throw new Error('ההודעה לא נשלחה');
+    console.log(`📤 סיכום ${when === 'morning' ? 'בוקר' : 'ערב'} נשלח ל-${user.name}`);
+  } catch (e) {
+    // משחררים את הסימון כדי שהסיכום יישלח כשהחיבור יחזור.
+    // סימון "נשלח" לפני שליחה מוצלחת אומר שיום שלם הולך לאיבוד.
+    await db.releaseDaily(user.id, kind);
+    console.error(`סיכום ${when} ל-${user.name} נכשל — ינוסה שוב:`, e.message || e);
+  }
 }
 
 // ── תזכורות בשעת היעד ───────────────────────────────────────────────

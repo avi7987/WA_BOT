@@ -52,6 +52,9 @@ const deps = {
   partnerOf,
   notify: sendTo,
   sendTo,
+  // המתזמן שואל לפני שהוא "מוציא" סיכום יומי — אחרת יום שלם
+  // מסומן כנשלח בזמן שהוואטסאפ מנותק, והסיכום אובד.
+  isReady: (user) => sessionFor(user)?.state === 'ready',
   sessionOf: sessionFor,
   // שליחה לאנשים אחרים וחיפוש אנשי קשר — מוזרקים, כדי שהלוגיקה
   // תהיה ניתנת לבדיקה בלי וואטסאפ אמיתי
@@ -152,6 +155,21 @@ async function boot() {
         users.set(person.key, updated);
       } catch (e) { console.error('שמירת מספר:', e.message); }
       await greetOnce(person.key, session);
+      session._wasLinked = true;
+    });
+
+    // סשן שהיה מחובר וירד לדרישת QR = ניתוק אמיתי, לא הקמה ראשונית.
+    // אי אפשר להודיע לו בוואטסאפ (זה בדיוק מה שנפל), אז לפחות
+    // מודיעים לצד השני אם הוא עוד מחובר, וצועקים בלוג.
+    session.client.on('qr', async () => {
+      if (!session._wasLinked || session._alerted) return;
+      session._alerted = true;
+      console.error(`🚨 ${person.name}: החיבור לוואטסאפ נותק ודורש סריקה מחדש! הבוט לא יגיב עד שיסרקו.`);
+      const me = users.get(person.key);
+      const other = me ? partnerOf(me) : null;
+      if (other && sessionFor(other)?.state === 'ready') {
+        await sendTo(other, `🚨 החיבור של ${person.name} לבוט נותק וצריך לסרוק QR מחדש. עד אז הוא לא יקבל ולא ישלח כלום.`);
+      }
     });
 
     // הפעלת הדפדפן נכשלת לפעמים באופן רגעי (עומס, קונטיינר שעוד נסגר).

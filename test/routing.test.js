@@ -84,3 +84,18 @@ test('התשובה לשאלה מתייקת למקום שבחרת', async () => {
   assert.match(reply, /💡/);
   assert.equal((await db.openRequests()).length, before + 1);
 });
+
+// ── סיכום יומי לא הולך לאיבוד כשהוואטסאפ מנותק ─────────────────────
+test('סיכום בוקר לא "נשרף" כשהשליחה נכשלה', async () => {
+  const { startScheduler } = await import('../src/scheduler.js');
+  assert.ok(startScheduler, 'המתזמן נטען');
+
+  // מדמים: הסימון היומי נתפס, ואז השליחה נכשלה
+  const claimed = await db.claimDaily(owner.id, 'digest_morning');
+  assert.equal(claimed, true, 'הסימון נתפס');
+  assert.equal(await db.claimDaily(owner.id, 'digest_morning'), false, 'לא נתפס פעמיים');
+
+  await db.releaseDaily(owner.id, 'digest_morning');
+  assert.equal(await db.claimDaily(owner.id, 'digest_morning'), true,
+    'אחרי שחרור אפשר לנסות שוב — כך הסיכום מגיע כשהחיבור חוזר');
+});

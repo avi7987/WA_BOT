@@ -333,6 +333,12 @@ export async function clearPending(userId) {
 
 // ── יומן שליחות יזומות ──────────────────────────────────────────────
 // מחזיר true אם זו הפעם הראשונה היום (ולכן מותר לשלוח)
+// משחרר סימון יומי שנכשל, כדי שהמשלוח ינוסה שוב
+export async function releaseDaily(userId, kind) {
+  await supabase.from('pa_log')
+    .delete().eq('user_id', userId).eq('kind', kind).eq('day', ilDateStr());
+}
+
 export async function claimDaily(userId, kind, meta = null) {
   const { error } = await supabase.from('pa_log')
     .insert({ user_id: userId, kind, day: ilDateStr(), meta });

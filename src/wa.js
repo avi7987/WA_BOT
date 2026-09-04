@@ -40,7 +40,15 @@ export function createSession({ key, label, onSelfMessage }) {
     puppeteer: {
       headless: true,
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      // טעינת וואטסאפ-ווב על שרת ARM חלש יכולה לחרוג מברירת המחדל
+      // ולהיתקע ב-"Runtime.callFunctionOn timed out" — מה שהפיל את
+      // שני הסשנים בפועל. מרחיבים את החלון.
+      protocolTimeout: 300_000,
+      args: [
+        '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+        '--disable-gpu', '--disable-extensions', '--no-first-run',
+        '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
+      ],
     },
   });
 
@@ -207,7 +215,7 @@ export async function sendSelf(session, text) {
   const target = session.selfLid || session.selfId;    // וואטסאפ החדש מכתובת לפי LID
   if (session.state !== 'ready' || !target) {
     console.warn(`⚠️  ${session.label}: לא מחובר — ההודעה לא נשלחה.`);
-    return null;
+    return false;        // false ולא null — כדי שהקורא יידע שזה כשל ולא ריק
   }
   remember(session._sentBodies, text);
   const msg = await session.client.sendMessage(target, text);
